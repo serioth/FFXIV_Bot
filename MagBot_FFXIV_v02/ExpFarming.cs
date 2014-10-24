@@ -8,6 +8,7 @@ namespace MagBot_FFXIV_v02
 {
     internal class ExpFarming
     {
+        //master branch
         private readonly Player _player;
         private readonly int _targetBaseOffset;
         private readonly int _targetTwoBaseOffset;
