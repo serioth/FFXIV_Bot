@@ -10,7 +10,7 @@ namespace MagBot_FFXIV_v02
         private readonly SynchronizationContext _uiContext;
 
         private delegate void UpdateTextDelegate(string label, string value);
-        private UpdateTextDelegate _updateTextDelegate;
+        private readonly UpdateTextDelegate _updateTextDelegate;
 
         public ManualResetEvent MRE { get; private set; }
 

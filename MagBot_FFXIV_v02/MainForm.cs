@@ -157,7 +157,7 @@ namespace MagBot_FFXIV_v02
 
         private void OnTimedEvent_ExpFarmingDone(object sender, EventArgs e)
         {
-            Globals.Instance.ExpFamingLogger.Log("Exp farming timer up, proceeding to escape route...");
+            Globals.Instance.ExpFarmingLogger.Log("Exp farming timer up, proceeding to escape route...");
             _expFarming.Escape(SelectedEscapeRoute);
         }
 
@@ -382,7 +382,7 @@ namespace MagBot_FFXIV_v02
 
                 if (Globals.Instance.ApplicationLogger != null) Globals.Instance.ApplicationLogger.Log("FormClosing event raised by program. Cleaning up resources, then exiting application...");
 
-                if (_bw != null && !_bw.MRE.WaitOne(0))
+                if (!_bw.MRE.WaitOne(0))
                 {
                     _bw.MRE.Set(); //This exits the loop
                     ClosePending = true;
@@ -397,11 +397,11 @@ namespace MagBot_FFXIV_v02
                         //Exp farming running in some form or another
                         SEFDelegate();
                     }
-                    Globals.Instance.ExpFamingLogger.Dispose();
+                    Globals.Instance.ExpFarmingLogger.Dispose();
                 }
 
                 MemoryHandler.Instance.Dispose();
-                Globals.Instance.ApplicationLogger.Dispose();
+                if (Globals.Instance.ApplicationLogger != null) Globals.Instance.ApplicationLogger.Dispose();
             }
         }
     }

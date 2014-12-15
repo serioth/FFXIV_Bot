@@ -6,18 +6,41 @@ namespace MagBot_FFXIV_v02
 {
     class Player : Character
     {
-        private readonly int _targetTwoBaseOffset;
-
-        public Player(int baseOffset)
-            : base(baseOffset)
+        public Player(int baseOffset) : base(baseOffset)
         {
-            _targetTwoBaseOffset = Globals.Instance.MemoryBaseOffsetDictionary["Target2"];
             PetInfo = new PetInfo();
         }
 
         private PetInfo PetInfo { get; set; }
 
-        private Character Target { get; set; }
+        public string RunToPoint(Func<Waypoint> wp, CancellationToken ct, bool stopAtEnd, bool aggro)
+        {
+            Globals.Instance.KeySenderInstance.SendDown(Keys.W); //Redundant if we already running path, but no harm in that
+
+            while ((wp().Distance(WaypointLocation) > ExpFarming.DistanceTreshold))
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    Globals.Instance.ExpFarmingLogger.Log("RunToPoint() cancelled...");
+                    Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+                    ct.ThrowIfCancellationRequested(); //THIS SHOULD PUT WHATEVER TASK CALLED THIS METHOD, INTO CANCELLED STATE
+                    return "RunToPoint() cancelled";
+                }
+
+                //In the case we escape and die on exit route
+                if (HP == 0) return "died";
+
+                //Unless player is currently escaping, he/she should always attack aggressors
+                if (!aggro) if (AggroCheck() != null) return "aggro";
+
+                Face(wp());
+                if (JumpIfStuck(wp()) == "stuck") return "stuck";
+            }
+
+            if (stopAtEnd) Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+
+            return "reached";
+        }
 
         private void Face(Waypoint pt)
         {
@@ -40,157 +63,75 @@ namespace MagBot_FFXIV_v02
             }
 
             //0.15 radians. 0.2 to ensure it works on slow pc?
-            while ((absAngleDiff > 0.15) && (pt.Distance(WaypointLocation) > ExpFarming.WaypointTurnDistance) && ExpFarming.Running)
+            while (!IsFacing(pt) && (pt.Distance(WaypointLocation) > ExpFarming.DistanceTreshold))
             {
-                angleDiff = FacingAngle - pt.Angle(WaypointLocation);
-                absAngleDiff = Math.Abs(angleDiff);
+                Thread.Sleep(10);
             }
+
             Globals.Instance.KeySenderInstance.SendUp(Keys.A);
             Globals.Instance.KeySenderInstance.SendUp(Keys.D);
         }
 
-        public bool IsFacing(Waypoint pt)
+        private bool IsFacing(Waypoint pt)
         {
             var absAngleDiff = Math.Abs(FacingAngle - pt.Angle(WaypointLocation));
             return !(absAngleDiff > 0.15);
         }
 
-
-        public string RunToPoint(Waypoint wp, Func<bool> run)
+        //This can potentially delay the stopping of the program by the total of the two sleeps
+        private string JumpIfStuck(Waypoint target)
         {
-            bool runToEnemy = run.Method.Name.Contains("AttackTarget");
-            var treshold = runToEnemy ? ExpFarming.AttackingDistance : ExpFarming.WaypointTurnDistance;
-            //Reset Camera
-            //MemoryHandler.HumanKeyPress(MemoryApi.KeyCode.NUMLOCK);
-            //Thread.Sleep(Utils.getRandom(100,300));
-            //MemoryHandler.HumanKeyPress(MemoryApi.KeyCode.END);
-            //Thread.Sleep(Utils.getRandom(100, 300));
-            //MemoryHandler.HumanKeyPress(MemoryApi.KeyCode.NUMLOCK);
+            var oldDistance = WaypointLocation.Distance(target);
+            Thread.Sleep(500);
+            if (WaypointLocation.Distance(target) < oldDistance) return null;
 
-            while ((wp.Distance(WaypointLocation) > treshold) && run())
+            for (var jumpCount = 0; jumpCount < 3; jumpCount++)
             {
-                if (runToEnemy) wp = Target.WaypointLocation;
-
-                if (HP == 0)
-                {
-                    return "died";
-                }
-
-                if (runToEnemy && !ExpFarming.Aggro)
-                {
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8, KeySender.ModifierControl);
-                    Thread.Sleep(Utils.getRandom(100, 200));
-                    Character aggressor = GetTarget(_targetTwoBaseOffset);
-                    if (aggressor != null && Target.ID != aggressor.ID)
-                    {
-                        Globals.Instance.ExpFamingLogger.Log("Retargeting aggressor...");
-                        ExpFarming.Aggro = true;
-                        wp = aggressor.WaypointLocation;
-                        Target = aggressor;
-                    }
-                }
-
-                Face(wp);
-
-                //Code to jump over obstacles if stuck
-                double tempDistance = WaypointLocation.Distance(wp);
-                Thread.Sleep(500);
-                var jumpCount = 0;
-                while (!(WaypointLocation.Distance(wp) < tempDistance * 0.99) && run())
-                {
-                    Globals.Instance.ExpFamingLogger.Log("Jumping...");
-                    Thread.Sleep(Utils.getRandom(800, 1200)); //TO avoid hitting jump to rapidly
-
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.Space);
-
-                    jumpCount++;
-
-                    if (jumpCount == 5)
-                    {
-                        return "stuck";
-                    }
-                }
+                Globals.Instance.ExpFarmingLogger.Log("Stuck, jumping...");
+                Globals.Instance.KeySenderInstance.SendKey(Keys.Space);
+                Thread.Sleep(300); //To avoid jumping too quickly
+                if (WaypointLocation.Distance(target) < oldDistance) return "jump ok";
             }
-            return ExpFarming.Running ? "point reached" : "running cancelled";
+            return "stuck";
         }
 
         //Runs to and attacks an enemy
-        public string AttackTarget(Character target)
+        public string AttackTarget(Character target, CancellationToken ct)
         {
-            Target = target;
-            Globals.Instance.ExpFamingLogger.Log("Targeting: " + Target.Name);
+            //TODO: This does not work as we are running continuosly. Place elsewhere (ensure we stop before running to enemy?
+            //if (!aggro) WaitForRegen(ct);
 
-            //Wait between tab and lock, and provide time to stop RunningHandler
-            //PROBLEM: This also makes player wait after one enemy is dead and you search for next
-            Thread.Sleep(Utils.getRandom(200, 400));
+            Globals.Instance.ExpFarmingLogger.Log("Attacking: " + target.Name);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0); //Engage enemy
 
-            //Lock onto enemy
-            //Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
-
-            //Thread.Sleep(Utils.getRandom(200, 400)); //After locking onto enemy, wait with running towards it
-
-            if (!ExpFarming.Aggro) WaitForRegen();
-
-            if (!ExpFarming.StandStill)
+            //Keep attacking until target is dead
+            while (target.HP > 0)
             {
-                Globals.Instance.KeySenderInstance.SendDown(Keys.W);
-                ExpFarming.Running = true;
-                string runResult = RunToPoint(Target.WaypointLocation, () => ExpFarming.Attacking);
-                ExpFarming.Running = false;
-                Globals.Instance.KeySenderInstance.SendUp(Keys.W);
-                switch (runResult)
+                if (ct.IsCancellationRequested)
                 {
-                    case("stuck"): return "Stuck. Jumping not successful.";
-                    case("running cancelled"): return "attack cancelled";
-                }
-            }
-
-            if (WaypointLocation.Distance(Target.WaypointLocation) > ExpFarming.MaxPullingDistance) return "target too far";
-
-            //Summoner battle preparation
-            //Here we look up in dictionary each time, that's ok as it is not a heavy operation
-            //Thread.Sleep(Utils.getRandom(200, 400));
-
-            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-
-            //Keep attacking until target is dead (not targetting anymore)
-            while (Target.HP > 0 && ExpFarming.Attacking)
-            {
-                if(RestoreHP()=="escape") return "escape";
-
-                if (PetInfo.PetHP < 100)
-                {
-                    UseSkill(Globals.Instance.SkillDictionary["SummonII"]);
+                    Globals.Instance.ExpFarmingLogger.Log("AttackTarget() cancelled...");
+                    ct.ThrowIfCancellationRequested(); //THIS SHOULD PUT WHATEVER TASK CALLED THIS METHOD, INTO CANCELLED STATE
+                    return "cancelled";
                 }
 
-                if (Target.HP <= 0) break;
-
-                if (RestoreHP() == "escape") return "escape";
-                UseSkill(Globals.Instance.SkillDictionary["Aetherflow"]);
-                UseSkill(Globals.Instance.SkillDictionary["EnergyDrain"]);
-                UseSkill(Globals.Instance.SkillDictionary["Virus"]);
-                
-                if (RestoreHP() == "escape") return "escape";
-                UseSkill(Globals.Instance.SkillDictionary["Miasma"]);
-                if (Target.HP <= 0) break;
-                
-                if (RestoreHP() == "escape") return "escape";
-                UseSkill(Globals.Instance.SkillDictionary["Bio"]);
-                if (Target.HP <= 0) break;
-                
-                if (RestoreHP() == "escape") return "escape";
-                UseSkill(Globals.Instance.SkillDictionary["Ruin"]);
+                if (SummonerAttackPattern(target) != "escape") continue;
+                return "escape";
             }
-            //No longer targetting the enemy, which means it must be dead
-
-            return ExpFarming.Attacking ? "target defeated" : "attack cancelled";
+            return "success";
         }
 
-        private void WaitForRegen()
+        private void WaitForRegen(CancellationToken ct)
         {
-            if (MP < MaxMP * 0.6) Globals.Instance.ExpFamingLogger.Log("MP < 60%. Waiting for MP to restore...");
-            while ((MP < MaxMP * 0.6) && ExpFarming.Attacking)
+            if (MP < MaxMP * 0.6) Globals.Instance.ExpFarmingLogger.Log("MP < 60%. Waiting for MP to restore...");
+            while ((MP < MaxMP * 0.6))
             {
+                if (ct.IsCancellationRequested)
+                {
+                    Globals.Instance.ExpFarmingLogger.Log("WaitForRegen() cancelled...");
+                    ct.ThrowIfCancellationRequested(); //THIS SHOULD PUT WHATEVER TASK CALLED THIS METHOD, INTO CANCELLED STATE
+                    return;
+                }
+
                 Thread.Sleep(300);
             }
         }
@@ -208,7 +149,29 @@ namespace MagBot_FFXIV_v02
             return "OK";
         }
 
-        public void Turn180()
+        public static Character AggroCheck()
+        {
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8, KeySender.ModifierControl);
+            Thread.Sleep(200);
+            var target = GetTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target2"]);
+            if (target == null) return null;
+
+            Globals.Instance.ExpFarmingLogger.Log("Aggressor found");
+            return target;
+        }
+
+        public static Character EnemyCheck()
+        {
+            Globals.Instance.KeySenderInstance.SendKey(Keys.Tab);
+            Thread.Sleep(200);
+            var target = GetTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target1"]);
+            if (target == null) return null;
+
+            Globals.Instance.ExpFarmingLogger.Log("Enemy found");
+            return target;
+        }
+
+        public static void Turn180()
         {
             Thread.Sleep(Utils.getRandom(300,600));
 
@@ -221,7 +184,7 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.KeySenderInstance.SendUp(Keys.W);
         }
 
-        public Character GetTarget(int targetBaseOffset)
+        public static Character GetTarget(int targetBaseOffset)
         {
             //This checks whether or not we are actually targeting something
             int lvlOneValue;
@@ -236,11 +199,9 @@ namespace MagBot_FFXIV_v02
 
         private void UseSkill(Skill skill)
         {
-            if (!ExpFarming.Attacking) return;
-
             if (skill.Ready != true || !(MP > skill.MPCost)) return;
 
-            Globals.Instance.ExpFamingLogger.Log("Using skill: " + skill.Name);
+            Globals.Instance.ExpFarmingLogger.Log("Using skill: " + skill.Name);
 
             Globals.Instance.KeySenderInstance.SendKey(Globals.Instance.KeySenderInstance.ToKey(skill.Button));
 
@@ -250,6 +211,35 @@ namespace MagBot_FFXIV_v02
             //After initiating the skill we need to sleep until it is finished casting
             //Sleep amount = random number from the time it takes to cast up to a second longer
             Thread.Sleep(Utils.getRandom(skill.Cast + 600, skill.Cast + 1200));
+        }
+
+        private string SummonerAttackPattern(Character target)
+        {
+            if (RestoreHP() == "escape") return "escape";
+
+            if (PetInfo.PetHP < 100)
+            {
+                UseSkill(Globals.Instance.SkillDictionary["SummonII"]);
+            }
+
+            if (RestoreHP() == "escape") return "escape";
+            UseSkill(Globals.Instance.SkillDictionary["Aetherflow"]);
+            UseSkill(Globals.Instance.SkillDictionary["EnergyDrain"]);
+            UseSkill(Globals.Instance.SkillDictionary["Virus"]);
+            if (target.HP <= 0) return "success";
+
+            if (RestoreHP() == "escape") return "escape";
+            UseSkill(Globals.Instance.SkillDictionary["Miasma"]);
+            if (target.HP <= 0) return "success";
+
+            if (RestoreHP() == "escape") return "escape";
+            UseSkill(Globals.Instance.SkillDictionary["Bio"]);
+            if (target.HP <= 0) return "success";
+
+            if (RestoreHP() == "escape") return "escape";
+            UseSkill(Globals.Instance.SkillDictionary["Ruin"]);
+            
+            return "pattern complete"; //No need to check if enemy is dead here, that's done in loop
         }
     }
 

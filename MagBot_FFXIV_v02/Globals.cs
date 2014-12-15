@@ -34,7 +34,7 @@ namespace MagBot_FFXIV_v02
         
         //Loggers
         public Logger ApplicationLogger { get; set; }
-        public Logger ExpFamingLogger { get; set; }
+        public Logger ExpFarmingLogger { get; set; }
 
         //public SkillCollection Skills { get; private set; }
 

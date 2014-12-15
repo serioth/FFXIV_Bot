@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Threading;
+using System.Timers;
 using System.Windows.Forms;
 using Timer = System.Timers.Timer;
 
@@ -20,31 +21,22 @@ namespace MagBot_FFXIV_v02
         //bool is by default atomic (a read/write operation cannot be interrupted half-way), so locking is not needed
         //Fields that are declared volatile are not subject to compiler optimizations that assume access by a single thread.
         //This ensures that the most up-to-date value is present in the field at all times.
-        private static volatile bool _running;
-        private static volatile bool _attacking;
         private static volatile bool _escaping;
 
         //CONSTANTS
-        public const int MaxPullingDistance = 25; //Max distance one can pull from (magic or archery reach)
+        private const int MaxPullingDistance = 25; //Max distance one can pull from (magic or archery reach)
         private const int MaxDistanceFromPath = 50;
-        public const int WaypointTurnDistance = 6;
-        public const int AttackingDistance = 8;
+        public const int DistanceTreshold = 6;
 
         private bool RestartExpFarming { get; set; }
 
-        public static bool StandStill { get; private set; }
+        private Waypoint CurrentWaypoint { get; set; }
 
-        public static bool Running
-        {
-            get { return _running; }
-            set { _running = value; }
-        }
+        private static CancellationTokenSource RunningCts { get; set; }
 
-        public static bool Attacking
-        {
-            get { return _attacking; }
-            private set { _attacking = value; }
-        }
+        private CancellationTokenSource AttackingCts { get; set; }
+
+        private Timer EnemySearchTimer { get; set; }
 
         private static bool Escaping
         {
@@ -52,31 +44,45 @@ namespace MagBot_FFXIV_v02
             set { _escaping = value; }
         }
 
-        public static bool Aggro { get; set; }
-
         public ExpFarming(Player player)
         {
             _player = player;
             _targetBaseOffset = Globals.Instance.MemoryBaseOffsetDictionary["Target"];
             _targetTwoBaseOffset = Globals.Instance.MemoryBaseOffsetDictionary["Target2"];
-            Globals.Instance.ExpFamingLogger = new Logger("ExpFarmingLog");
+            Globals.Instance.ExpFarmingLogger = new Logger("ExpFarmingLog");
         }
 
-        public void StartExpFarming(Route startingRoute, Waypoint startingWaypoint, Route escapeRoute, bool standStill)
+        private void OnElapsedEventFindEnemy(Player player, CancellationToken ct, Route escapeRoute)
         {
-            StandStill = standStill;
+            //First check if any enemies are attacking us
+            var aggro = false;
+            var target = Player.AggroCheck();
+            if (target != null) aggro = true;
+            else target = Player.EnemyCheck();
+
+            EnemySearchTimer.Stop();
+            RunningCts.Cancel();
+            PursueEnemy(player, target, ct, aggro, escapeRoute);
+            //TODO: If enemy found, stop running, stop checking for enemies, and initiate EnemyPursuit
+            //TODO: The results from EnemyPursuit can propagate back up here as this is the highest level
+        }
+
+        public void StartExpFarming(Player player, Route startingRoute, Waypoint startingWaypoint, Route escapeRoute, bool standStill)
+        {
+            EnemySearchTimer = new Timer(1000) {AutoReset = false};
+            EnemySearchTimer.Elapsed += (sender, args) => OnElapsedEventFindEnemy(player, AttackingCts.Token, escapeRoute);
 
             //Ensure NUMLOCK is on (has to use SendInput)
             if (!MemoryHandler.IsKeyLocked(MemoryApi.KeyCode.NUMLOCK))
             {
-                Globals.Instance.ExpFamingLogger.Log("Turning NUMLOCK on...");
+                Globals.Instance.ExpFarmingLogger.Log("Turning NUMLOCK on...");
                 MemoryHandler.HumanKeyPress(MemoryApi.KeyCode.NUMLOCK);
             }
 
-            Globals.Instance.ExpFamingLogger.Log("=====!!!!===== Initiating Exp Farming =====!!!!=====");
+            Globals.Instance.ExpFarmingLogger.Log("=====!!!!===== Initiating Exp Farming =====!!!!=====");
 
             //Heal up before we start
-            if (_player.HP < _player.MaxHP || _player.MP < _player.MaxMP) Globals.Instance.ExpFamingLogger.Log("Healing up prior to starting exp farming...");
+            if (_player.HP < _player.MaxHP || _player.MP < _player.MaxMP) Globals.Instance.ExpFarmingLogger.Log("Healing up prior to starting exp farming...");
             while ((_player.HP < _player.MaxHP*0.9 || _player.MP < _player.MaxMP*0.9))
             {
                 int tempHP = _player.HP;
@@ -88,7 +94,7 @@ namespace MagBot_FFXIV_v02
                     //The _runningThread can never complete though, because Invoke is synchronous: Caller (_runningThread) is blocked until the marshal is complete (method returns)
                     //We have to use BeginInvoke to avoid this Deadlock
                     //BeginInvoke works asynchronously: Caller returns immediately and the marshaled request is queued up. In other words, it does not block _runningThread from completing
-                    Globals.Instance.ExpFamingLogger.Log("Being attacked while resting prior to start of exp farming. Stopping farming...");
+                    Globals.Instance.ExpFarmingLogger.Log("Being attacked while resting prior to start of exp farming. Stopping farming...");
                     MainForm.Get.BeginInvoke(MainForm.Get.SEFDelegate);
                     return;
                 }
@@ -109,9 +115,60 @@ namespace MagBot_FFXIV_v02
             _attackingThread.Start();
         }
 
+        private void RunRouteToPoint(Player player, Route route, Waypoint goalWp, CancellationToken ct, bool escaping)
+        {
+            var cts = new CancellationTokenSource();
+            var wp = route.ClosestWaypoint(player.WaypointLocation);
+            Globals.Instance.KeySenderInstance.SendDown(Keys.W);
+            while (wp != goalWp)
+            {
+                player.RunToPoint(() => wp, ct, false, escaping);
+                wp = route.NextWaypoint(wp);
+            }
+            Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+        }
+
+        private void PursueEnemy(Player player, Character target, CancellationToken ct, bool aggro, Route escapeRoute)
+        {
+            //If we spotted an enemy, but it's level is too high, ignore it
+            //If we get aggro from an enemy and its level is too high, escape
+            if (target.Level > player.Level + 5)
+            {
+                if (!aggro) return;
+                InitiateEscape(player, escapeRoute, ct);
+                return;
+            };
+
+            switch (player.RunToPoint(() => target.WaypointLocation, ct, true, aggro))
+            {
+                case ("RunToPoint() cancelled"): return;
+                case ("died"): StopExpFarming(); return;
+                case ("stuck"): break; //If stuck we still try to attack aggressor as it will come to us
+                case ("reached"): break; //Attack aggressor
+                case ("aggro"):
+                    var aggressor = Player.AggroCheck();
+                    if (aggressor != null) PursueEnemy(player, aggressor, ct, true, escapeRoute);
+                    return; //If we defeat aggressor, we do not want to continue on the enemy we persued before. Start from scratch
+            }
+            switch (player.AttackTarget(target, ct))
+            {
+                case ("cancelled"):
+                    return;
+                case ("escape"):
+                    InitiateEscape(player,escapeRoute, ct);
+            }
+        }
+
+
+        private void InitiateEscape(Player player, Route escapeRoute, CancellationToken ct)
+        {
+            Globals.Instance.ExpFarmingLogger.Log("Escape initiated...");
+            RunRouteToPoint(player, escapeRoute, escapeRoute.Points[0], ct, true);
+        }
+
         public void StopExpFarming() 
         {
-            Globals.Instance.ExpFamingLogger.Log("=====!!!!===== Exp farming stopped, releasing threads... =====!!!!===== ");
+            Globals.Instance.ExpFarmingLogger.Log("=====!!!!===== Exp farming stopped, releasing threads... =====!!!!===== ");
             StopAttacking();
             StopRunning();
             RestartExpFarming = false;
@@ -124,43 +181,45 @@ namespace MagBot_FFXIV_v02
             //Check if too close to starting-waypoint
             if (_player.WaypointLocation.Distance(waypoint) < 5)
             {
-                Globals.Instance.ExpFamingLogger.Log("Too close to starting waypoint. Skipping to next waypoint...");
+                Globals.Instance.ExpFarmingLogger.Log("Too close to starting waypoint. Skipping to next waypoint...");
                 waypoint = route.NextWaypoint(waypoint);
             }
             
             Globals.Instance.KeySenderInstance.SendDown(Keys.W);
 
+            var cts = new CancellationTokenSource();
+
             while (Running)
             {
-                Globals.Instance.ExpFamingLogger.Log("Running to point: " + route.Points.IndexOf(waypoint));
-                string runningOutcome = _player.RunToPoint(waypoint, () => Running);
+                Globals.Instance.ExpFarmingLogger.Log("Running to point: " + route.Points.IndexOf(waypoint));
+                var runningOutcome = _player.RunToPoint(() => CurrentWaypoint, cts.Token);
 
-                switch(runningOutcome) 
+                switch(runningOutcome.Result) 
                 {
                     case ("died"):
-                        Globals.Instance.ExpFamingLogger.Log("Died while running...");
+                        Globals.Instance.ExpFarmingLogger.Log("Died while running...");
                         MainForm.Get.BeginInvoke(MainForm.Get.SEFDelegate);
                         return;
                     case("stuck"):
-                        Globals.Instance.ExpFamingLogger.Log("Stuck while running. Trying to turn and select new point");
-                        _player.Turn180();
+                        Globals.Instance.ExpFarmingLogger.Log("Stuck while running. Trying to turn and select new point");
+                        Player.Turn180();
                         break;
                     case ("point reached"):
-                        Globals.Instance.ExpFamingLogger.Log("Reached point: " + route.Points.IndexOf(waypoint));
+                        Globals.Instance.ExpFarmingLogger.Log("Reached point: " + route.Points.IndexOf(waypoint));
                         break;
                     case("running cancelled"):
-                        Globals.Instance.ExpFamingLogger.Log("RunToPoint() cancelled");
+                        Globals.Instance.ExpFarmingLogger.Log("RunToPoint() cancelled");
                         return;
                 }
 
                 //We have reached end of escape route
                 if (Escaping && (waypoint == route.Points.Last()))
                 {
-                    Globals.Instance.ExpFamingLogger.Log("End of escape route reached..");
+                    Globals.Instance.ExpFarmingLogger.Log("End of escape route reached..");
 
                     if (RestartExpFarming)
                     {
-                        Globals.Instance.ExpFamingLogger.Log("Escape successful. Exp farming restarting shortly...");
+                        Globals.Instance.ExpFarmingLogger.Log("Escape successful. Exp farming restarting shortly...");
                         //It does not matter that the minutes here is small
                         //because when the farming restarts the player waits until healed
                         const int minutesToRestart = 1;
@@ -179,7 +238,7 @@ namespace MagBot_FFXIV_v02
             //Important because running is often stopped while w/a/d is still pressed
             ReleaseAllButtons();
 
-            Globals.Instance.ExpFamingLogger.Log("RunningHandler thread terminated...");
+            Globals.Instance.ExpFarmingLogger.Log("RunningHandler thread terminated...");
         }
 
         //Tabs for enemies and reacts to outcome of attacking
@@ -193,10 +252,10 @@ namespace MagBot_FFXIV_v02
                 //First check if any enemies are attacking us
                 Aggro = false;
                 Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8, KeySender.ModifierControl);
-                Character target = _player.GetTarget(_targetTwoBaseOffset);
+                Character target = Player.GetTarget(_targetTwoBaseOffset);
                 if (target != null)
                 {
-                    Globals.Instance.ExpFamingLogger.Log("Targeting aggressor...");
+                    Globals.Instance.ExpFarmingLogger.Log("Targeting aggressor...");
                     Aggro = true;
                 }
 
@@ -207,13 +266,13 @@ namespace MagBot_FFXIV_v02
                     //AttackThread is slept until player is back at that waypoint
                     if (!StandStill && _player.WaypointLocation.Distance(route.ClosestWaypoint(_player.WaypointLocation)) > MaxDistanceFromPath)
                     {
-                        Globals.Instance.ExpFamingLogger.Log("Now too far from closest waypoint. Returning to waypoint 1...");
+                        Globals.Instance.ExpFarmingLogger.Log("Now too far from closest waypoint. Returning to waypoint 1...");
                         StartRunning(route, route.Points[0], true);
                         continue;
                     }
 
                     Globals.Instance.KeySenderInstance.SendKey(Keys.Tab);
-                    target = _player.GetTarget(_targetBaseOffset);
+                    target = Player.GetTarget(_targetBaseOffset);
                 }
 
                 //If any enemy targeted, attack it
@@ -225,7 +284,7 @@ namespace MagBot_FFXIV_v02
                         while (Attacking && target.WaypointLocation.Distance(_player.WaypointLocation) > MaxPullingDistance)
                         {
                             Globals.Instance.KeySenderInstance.SendKey(Keys.Tab);
-                            target = _player.GetTarget(_targetBaseOffset);
+                            target = Player.GetTarget(_targetBaseOffset);
                             Thread.Sleep(Utils.getRandom(500, 1000));
                         }
                     }
@@ -240,31 +299,31 @@ namespace MagBot_FFXIV_v02
                     {
                         case "escape":
                             if (StandStill) return;
-                            Globals.Instance.ExpFamingLogger.Log("Danger in battle, initiating escape...");
+                            Globals.Instance.ExpFarmingLogger.Log("Danger in battle, initiating escape...");
                             RestartExpFarming = true;
                             Escape(escapeRoute);
                             return;
                         case "Stuck. Jumping not successful.":
-                            Globals.Instance.ExpFamingLogger.Log("Stuck. Jumping not successful. Attempting to turn around and pick another target...");
+                            Globals.Instance.ExpFarmingLogger.Log("Stuck. Jumping not successful. Attempting to turn around and pick another target...");
                             Globals.Instance.KeySenderInstance.SendKey(Keys.Escape);
-                            _player.Turn180();
+                            Player.Turn180();
                             break;
                         case "target too far":
-                            Globals.Instance.ExpFamingLogger.Log("Target now too far away. Proceeding to search for next target...");
+                            Globals.Instance.ExpFarmingLogger.Log("Target now too far away. Proceeding to search for next target...");
                             Globals.Instance.KeySenderInstance.SendKey(Keys.Escape);
                             break;
                         case ("target defeated"):
-                            Globals.Instance.ExpFamingLogger.Log("Attack successful. Proceeding to search for next target...");
+                            Globals.Instance.ExpFarmingLogger.Log("Attack successful. Proceeding to search for next target...");
                             break;
                         case ("attack cancelled"):
-                            Globals.Instance.ExpFamingLogger.Log("Attack cancelled...");
+                            Globals.Instance.ExpFarmingLogger.Log("Attack cancelled...");
                             return;
                     }
                     continue;
                 }
 
                 //No target found, going back to closest current waypoint and start running path again while searching for targets
-                //Globals.Instance.ExpFamingLogger.Log("Could not find any targets. Continuing on path...");
+                //Globals.Instance.ExpFarmingLogger.Log("Could not find any targets. Continuing on path...");
                 if (StandStill) continue;
 
                 StartRunning(route, route.ClosestWaypoint(_player.WaypointLocation), false);
@@ -273,7 +332,7 @@ namespace MagBot_FFXIV_v02
             //Important because attacking can be stopped while w is still pressed
             ReleaseAllButtons();
 
-            Globals.Instance.ExpFamingLogger.Log("AttackHandler thread terminated...");
+            Globals.Instance.ExpFarmingLogger.Log("AttackHandler thread terminated...");
         }
 
         //Restarting running from specified waypoint
@@ -285,7 +344,7 @@ namespace MagBot_FFXIV_v02
 
             if (!Running)
             {
-                Globals.Instance.ExpFamingLogger.Log("StartRunning() initiated from thread: " + Thread.CurrentThread.Name +". Starting _runningThread from: " +
+                Globals.Instance.ExpFarmingLogger.Log("StartRunning() initiated from thread: " + Thread.CurrentThread.Name +". Starting _runningThread from: " +
                                                                        restartFromRoute.Name + ", Waypoint: " +
                                                                        restartFromRoute.Points.IndexOf(restartFromWp) /+ 1);
                 //StopRunning();
@@ -300,14 +359,14 @@ namespace MagBot_FFXIV_v02
             }
             //else
             //{
-            //    Globals.Instance.ExpFamingLogger.Log("StartRunning() entered without restarting _runningThread...");
+            //    Globals.Instance.ExpFarmingLogger.Log("StartRunning() entered without restarting _runningThread...");
             //}
 
             //If returnAllTheWay flag is set, give it time to return to the waypoint before we continue next action
             //This method is only called from the AttackHandler thread, so it sleeps Attacking thread
             if (!returnAllTheWay) return;
-            Globals.Instance.ExpFamingLogger.Log("Returning all the way to waypoint " + restartFromRoute.Points.IndexOf(restartFromWp) /+ 1 + " before proceeding with next action...");
-            while (restartFromWp.Distance(_player.WaypointLocation) > WaypointTurnDistance) Thread.Sleep(1000);
+            Globals.Instance.ExpFarmingLogger.Log("Returning all the way to waypoint " + restartFromRoute.Points.IndexOf(restartFromWp) /+ 1 + " before proceeding with next action...");
+            while (restartFromWp.Distance(_player.WaypointLocation) > DistanceTreshold) Thread.Sleep(1000);
         }
 
         //Only called from AttackHandler thread / UI thread
@@ -317,13 +376,13 @@ namespace MagBot_FFXIV_v02
             if (!Running) return;
             if (Thread.CurrentThread == _runningThread)
             {
-                Globals.Instance.ExpFamingLogger.Log(
+                Globals.Instance.ExpFarmingLogger.Log(
                     "StopRunning() called from _runningThread, setting Running bool to false...");
                 Running = false;
             }
             else
             {
-                Globals.Instance.ExpFamingLogger.Log("StopRunning() called from thread: " + Thread.CurrentThread.Name + ". Setting Running bool to false and waiting for _runningThread to terminate....");
+                Globals.Instance.ExpFarmingLogger.Log("StopRunning() called from thread: " + Thread.CurrentThread.Name + ". Setting Running bool to false and waiting for _runningThread to terminate....");
                 Running = false;
                 _runningThread.Join();
             }
@@ -334,13 +393,13 @@ namespace MagBot_FFXIV_v02
             if (!Attacking) return;
             if (Thread.CurrentThread == _attackingThread)
             {
-                Globals.Instance.ExpFamingLogger.Log(
+                Globals.Instance.ExpFarmingLogger.Log(
                     "StopAttacking() called from _attackingThread, setting Attacking bool to false...");
                 Attacking = false;
             }
             else
             {
-                Globals.Instance.ExpFamingLogger.Log("StopAttacking() called from thread: " + Thread.CurrentThread.Name + ". Setting Attacking bool to false and waiting for _attackingThread to terminate...");
+                Globals.Instance.ExpFarmingLogger.Log("StopAttacking() called from thread: " + Thread.CurrentThread.Name + ". Setting Attacking bool to false and waiting for _attackingThread to terminate...");
                 Attacking = false;
                 _attackingThread.Join();
             }
@@ -348,12 +407,20 @@ namespace MagBot_FFXIV_v02
 
         public void Escape(Route escapeRoute)
         {
-            Globals.Instance.ExpFamingLogger.Log("Initiating escape from closest waypoint through " + escapeRoute.Name);
+            Globals.Instance.ExpFarmingLogger.Log("Initiating escape from closest waypoint through " + escapeRoute.Name);
             Escaping = true;
             StopAttacking();
             StopRunning();
 
             StartRunning(escapeRoute, escapeRoute.ClosestWaypoint(_player.WaypointLocation), true);
+
+            var aTimer = new Timer(200);
+            aTimer.Elapsed += delegate(object sender, ElapsedEventArgs e) { CheckDistance(1); };
+            aTimer.Enabled = true;
+        }
+
+        private void CheckDistance(int i)
+        {
         }
 
         private void OnTimedEvent_ExpFarmingRestart(object sender, EventArgs e)
@@ -363,7 +430,7 @@ namespace MagBot_FFXIV_v02
 
         private void ReleaseAllButtons()
         {
-            Globals.Instance.ExpFamingLogger.Log("Releasing all buttons...");
+            Globals.Instance.ExpFarmingLogger.Log("Releasing all buttons...");
             Globals.Instance.KeySenderInstance.SendUp(Keys.A);
             Globals.Instance.KeySenderInstance.SendUp(Keys.D);
             Globals.Instance.KeySenderInstance.SendUp(Keys.W);

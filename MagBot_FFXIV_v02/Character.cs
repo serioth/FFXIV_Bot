@@ -19,7 +19,7 @@ namespace MagBot_FFXIV_v02
         private float _x, _y, _z;
         private Waypoint _waypointLocation = new Waypoint(0, 0, 0);
 
-        public Character(int baseOffset)
+        protected internal Character(int baseOffset)
         {
             LoadPointers(baseOffset);
         }
@@ -41,6 +41,16 @@ namespace MagBot_FFXIV_v02
             {
                 MemoryHandler.Instance.ReadString(_namePointer, 15, out _name);
                 return _name;
+            }
+        }
+
+        private byte _level;
+        internal int Level
+        {
+            get
+            {
+                MemoryHandler.Instance.ReadByte(_namePointer, out _level);
+                return Convert.ToInt32(_level);
             }
         }
 
@@ -162,6 +172,9 @@ namespace MagBot_FFXIV_v02
             _basePointer = MemoryHandler.Instance.GetPointerFromOffsets(new[] {offsets[0]});
 
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["Name"][0];
+            _namePointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
+
+            offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["Level"][0];
             _namePointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
 
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["HP"][0];
