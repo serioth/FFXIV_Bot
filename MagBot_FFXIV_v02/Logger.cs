@@ -18,7 +18,6 @@ namespace MagBot_FFXIV_v02
             _w.WriteLine("");
             _w.WriteLine("STARTING NEW: " + filename);
             _w.WriteLine("==================================");
-
         }
 
         private readonly string _path;

@@ -6,6 +6,7 @@ namespace MagBot_FFXIV_v02
     {
         private IntPtr _basePointer;
         private IntPtr _namePointer;
+        private IntPtr _levelPointer;
         private IntPtr _hpPointer;
         private IntPtr _maxHpPointer;
         private IntPtr _mpPointer;
@@ -49,7 +50,7 @@ namespace MagBot_FFXIV_v02
         {
             get
             {
-                MemoryHandler.Instance.ReadByte(_namePointer, out _level);
+                MemoryHandler.Instance.ReadByte(_levelPointer, out _level);
                 return Convert.ToInt32(_level);
             }
         }
@@ -175,7 +176,7 @@ namespace MagBot_FFXIV_v02
             _namePointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
 
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["Level"][0];
-            _namePointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
+            _levelPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
 
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["HP"][0];
             _hpPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);

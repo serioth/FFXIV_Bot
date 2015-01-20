@@ -119,6 +119,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ChatLogHandler.cs" />
     <Compile Include="ExpFarming.cs" />
     <Compile Include="Globals.cs" />
     <Compile Include="KeySender.cs" />

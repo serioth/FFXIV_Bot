@@ -67,5 +67,14 @@ namespace MagBot_FFXIV_v02
             }
             return closestPoint;
         }
+
+        public Waypoint PreviousWaypoint(Waypoint wp)
+        {
+            if (wp == Points.First())
+            {
+                return Points.Last();
+            }
+            return Points[Points.IndexOf(wp) - 1];
+        }
     }
 }

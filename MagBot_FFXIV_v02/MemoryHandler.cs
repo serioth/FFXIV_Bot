@@ -558,7 +558,7 @@ namespace MagBot_FFXIV_v02
         public MemoryResult ReadShort(IntPtr memoryAddress, out short outShort)
         {
             ResetError();
-            byte[] buffer = new byte[2];
+            var buffer = new byte[2];
 
             int ptrBytesRead; // error checking
             if (!MemoryApi.ReadProcessMemory(_processHandle, memoryAddress, buffer, sizeof(short), out ptrBytesRead)
