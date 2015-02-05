@@ -12,7 +12,8 @@ namespace MagBot_FFXIV_v02
         private IntPtr _mpPointer;
         private IntPtr _maxMpPointer;
         private IntPtr _tpPointer;
-        private IntPtr _maxTpPointer;
+        private IntPtr _gpPointer;
+        private IntPtr _maxGpPointer;
         private IntPtr _xCoordinatePointer;
         private IntPtr _yCoordinatePointer;
         private IntPtr _zCoordinatePointer;
@@ -40,7 +41,7 @@ namespace MagBot_FFXIV_v02
         {
             get
             {
-                MemoryHandler.Instance.ReadString(_namePointer, 15, out _name);
+                MemoryHandler.Instance.ReadString(_namePointer, 20, out _name);
                 return _name;
             }
         }
@@ -105,13 +106,23 @@ namespace MagBot_FFXIV_v02
             }
         }
 
-        private short _maxTP;
-        internal short MaxTP
+        private short _gp;
+        internal short GP
         {
             get
             {
-                MemoryHandler.Instance.ReadShort(_maxTpPointer, out _maxTP);
-                return _maxTP;
+                MemoryHandler.Instance.ReadShort(_gpPointer, out _gp);
+                return _gp;
+            }
+        }
+
+        private short _maxGP;
+        internal short MaxGP
+        {
+            get
+            {
+                MemoryHandler.Instance.ReadShort(_maxGpPointer, out _maxGP);
+                return _maxGP;
             }
         }
 
@@ -193,8 +204,11 @@ namespace MagBot_FFXIV_v02
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["TP"][0];
             _tpPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
 
-            offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["MaxTP"][0];
-            _maxTpPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
+            offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["GP"][0];
+            _gpPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
+
+            offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["MaxGP"][0];
+            _maxGpPointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);
 
             offsets[1] = Globals.Instance.MemoryAdditionalOffsetDictionary["XCoordinate"][0];
             _xCoordinatePointer = MemoryHandler.Instance.GetPointerFromOffsets(offsets);

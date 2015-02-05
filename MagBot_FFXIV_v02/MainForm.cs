@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using MagBot_FFXIV_v02.Properties;
 using Timer = System.Timers.Timer;
 
 namespace MagBot_FFXIV_v02
@@ -18,12 +17,14 @@ namespace MagBot_FFXIV_v02
 
         private bool _getProcessResult;
         private Player _player;
-        private ExpFarming _expFarming;
-        private Worker _bw;
+        private FarmingHandler _farmingHandler;
+        private TweaksHandler _tweaksHandler;
         private ChatLogHandler _chatLogHandler;
-        private Thread _expFarmingThread;
-        private Timer _endExpFarmingTimer;
-        private int _expFarmingSecondsPassed;
+        private Thread _farmingThread;
+        private Timer _farmingTimer;
+        public int FarmingSecondsPassed;
+        private ManualResetEvent _chatLogMre;
+        private RouteManager _farmingRouteManager;
 
         public SynchronizationContext UISynchContext { get; private set; }
 
@@ -43,9 +44,9 @@ namespace MagBot_FFXIV_v02
 
             SEFDelegate = () =>
             {
-                Globals.Instance.ExpFarmingLogger.Log("SEFDelegate called, fixing control visibility...");
-                EnableChildrenControls(ExpFarmingTab);
-                _endExpFarmingTimer.Stop();
+                Globals.Instance.GameLogger.Log("SEFDelegate called, fixing control visibility...");
+                EnableChildrenControls(FarmingTab);
+                _farmingTimer.Stop();
                 btStopExpFarming.Enabled = false;
             };
         }
@@ -74,7 +75,10 @@ namespace MagBot_FFXIV_v02
                     return;
                 }
             }
+
+            //Instantiate Loggers
             Globals.Instance.ApplicationLogger = new Logger("ApplicationLog");
+            Globals.Instance.GameLogger = new Logger("GameLog");
 
             //2 Load XML Files and initialize other globals dictionaries
             Globals.Instance.InitializeDictionaries();
@@ -111,120 +115,146 @@ namespace MagBot_FFXIV_v02
             }
 
             //Start ChatLogHandler
+            _chatLogMre = new ManualResetEvent(false);
             _chatLogHandler = new ChatLogHandler();
+            _chatLogHandler.StartChatLogMonitoring(_chatLogMre);
+
+            //Instantiate _tweaksHandler
+            _tweaksHandler = new TweaksHandler(_player);
         }
 
         private void tab_SelectedIndexChanged(object sender, EventArgs e)
         {
-            var page = sender as TabPage;
+            if ((sender as TabControl) == null) return;
+            var page = (sender as TabControl).SelectedTab;
             
-            //Create new expFarming instance and start updating GUI
-            if (page != null && _expFarming == null && page.Name == "ExpFarming")
+            //Create instances
+            if (page != null && page.Name == "FarmingTab")
             {
-                _expFarming = new ExpFarming(_player);
+                if(_farmingRouteManager == null) _farmingRouteManager = new RouteManager();
+                if(_farmingHandler == null) _farmingHandler = new FarmingHandler(_player);
             }
         }
 
         private void btStartExpFarming_Click(object sender, EventArgs e)
         {
+            //Check validity of input
+            if (_farmingRouteManager.Routes.Count == 0 || _farmingRouteManager.Routes.Any(route => route.Points.Count < 3))
+            {
+                Globals.Instance.ShowMessage(@"Please add at least three points to every route.");
+                return;
+            }
+
             //Disables all controls except for stop button
-            DisableChildrenControls(ExpFarmingTab);
+            DisableChildrenControls(FarmingTab);
             EnableControl(btStopExpFarming);
 
+            //Target List
+            var targetList = tbEnemyNames.Text.Trim();
+            var targetArray = targetList.Split(',').Select(target => target.Trim()).ToArray();
+
             //Set up timer to end expFarming automatically
+            _farmingTimer = new Timer { Interval = 1000, AutoReset = true }; //Ticks every second
             var secondsToRun = Convert.ToInt32(nudHours.Text) * 3600 + Convert.ToInt32(nudMinutes.Text) * 60;
-            _expFarmingSecondsPassed = 0;
+            FarmingSecondsPassed = 0;
 
-            _endExpFarmingTimer = new Timer { Interval = 1000, AutoReset = true }; //Ticks every second
-            var selectedEscapeRoute = RouteManager.Instance.Routes[cbEscapeRoutes.SelectedIndex];
+            var selectedEscapeRoute = _farmingRouteManager.Routes[cbEscapeRoutes.SelectedIndex];
 
-            //Just takes the first row in selection, if selected several rows. SubItem[0] is the waypoint index
-            if (cbStandStill.Checked)
+            if (rbBattle.Checked)
             {
-                _expFarmingThread = new Thread(() => _expFarming.StartStandStillExpFarming(selectedEscapeRoute));
-                _endExpFarmingTimer.Elapsed += (s, a) => OnTimedEvent_ExpFarmingDone(secondsToRun);
+                //Just takes the first row in selection, if selected several rows. SubItem[0] is the waypoint index
+                if (cbStandStill.Checked)
+                {
+                    _farmingThread = new Thread(() => _farmingHandler.StartStandStillExpFarming(selectedEscapeRoute));
+                    _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun);
+                }
+                else
+                {
+                    var selectedRoute = _farmingRouteManager.Routes[Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1];
+                    _farmingThread = new Thread(() => _farmingHandler.StartExpFarming(selectedRoute, selectedEscapeRoute, targetArray));
+                    _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun, selectedEscapeRoute);
+                }
             }
-            else
+            else if (rbDoL.Checked)
             {
-                var selectedRoute = RouteManager.Instance.Routes[Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1];
-                _expFarmingThread = new Thread(() => _expFarming.StartExpFarming(selectedRoute, selectedEscapeRoute));
-                _endExpFarmingTimer.Elapsed += (s, a) => OnTimedEvent_ExpFarmingDone(secondsToRun, selectedEscapeRoute);
+                var selectedRoute = _farmingRouteManager.Routes[Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1];
+                _farmingThread = new Thread(() => _farmingHandler.StartGathering(selectedRoute, selectedEscapeRoute));
+                _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun, selectedEscapeRoute);
             }
-            _expFarmingThread.IsBackground = true;
-            _expFarmingThread.Name = "ExpFarming Thread";
-            _expFarmingThread.Start();
-            _endExpFarmingTimer.Start();
+            _farmingThread.IsBackground = true;
+            _farmingThread.Name = "FarmingHandler Thread";
+            _farmingThread.Start();
+            _farmingTimer.Start();
+
+            //Give focus to window
+            MemoryHandler.Instance.SwitchWindow();
         }
 
-        private void OnTimedEvent_ExpFarmingDone(int totalSecondsToRun, Route escapeRoute = null)
+        private void OnTimedEvent_FarmingTimer(int totalSecondsToRun, Route escapeRoute = null)
         {
-            _expFarmingSecondsPassed ++;
-            var ts = TimeSpan.FromSeconds(_expFarmingSecondsPassed);
+            FarmingSecondsPassed++;
+            var ts = TimeSpan.FromSeconds(FarmingSecondsPassed);
             var timeElapsed = string.Format("{0:D2}h:{1:D2}m:{2:D2}s", ts.Hours, ts.Minutes, ts.Seconds);
-            UISynchContext.Send(o => lbExpFarmingElapsedTime.Text = timeElapsed, null);
-            Console.WriteLine(@"Seconds passed: {0}, Seconds to run: {1}", _expFarmingSecondsPassed, totalSecondsToRun);
-            if (_expFarmingSecondsPassed != totalSecondsToRun) return;
-            
-            _endExpFarmingTimer.Stop();
-            Globals.Instance.ExpFarmingLogger.Log("Exp farming timer up, proceeding to escape route...");
-            _expFarming.StopApp();
-            _expFarmingThread.Join();
-            _expFarming.Cancel.Reset();
+            UISynchContext.Send(o => lbFarmingElapsedTime.Text = timeElapsed, null);
+            if (FarmingSecondsPassed != totalSecondsToRun) return;
+
+            _farmingTimer.Stop();
+            Globals.Instance.GameLogger.Log("Farming timer up, proceeding to escape route...");
+            _farmingHandler.StopApp();
+            _farmingThread.Join();
+            _farmingHandler.FarmingMre.Reset();
+
             if (escapeRoute != null)
             {
-                Task.Run(() =>
-                {
-                    _expFarming.InitiateEscape(escapeRoute, false, _expFarming.Cancel);
-                    _expFarming.Cancel.WaitOne(20000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.D1, KeySender.ModifierControl);
-                    _expFarming.Cancel.WaitOne(1000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-                    _expFarming.Cancel.WaitOne(1000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad4);
-                    _expFarming.Cancel.WaitOne(500);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-                    _expFarming.Cancel.WaitOne(30000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.D0, KeySender.ModifierControl);
-                    _expFarming.Cancel.WaitOne(1000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-                    _expFarming.Cancel.WaitOne(1000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad4);
-                    _expFarming.Cancel.WaitOne(1000);
-                    Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-                    _expFarming.Cancel.Set();
-                });
+                Task.Run(() => _farmingHandler.FinalActions(escapeRoute, _farmingHandler.FarmingMre));
             }
         }
 
         private void btStopExpFarming_Click(object sender, EventArgs e)
         {
-            _expFarming.StopApp();
+            _farmingHandler.StopApp();
         }
 
         private void btNewRoute_Click(object sender, EventArgs e)
         {
-            RouteManager.Instance.Routes.Add(new Route("Route " + (RouteManager.Instance.Routes.Count + 1)));
-            RecordWaypoint(RouteManager.Instance.Routes.Last());
-            btRecWaypoint.Enabled = true;
+            NewRoute(_farmingRouteManager, lvWaypoints, cbEscapeRoutes);
+        }
+
+        private void btRecWaypoint_Click(object sender, EventArgs e)
+        {
+            RecordWaypoint(_farmingRouteManager, lvWaypoints, cbEscapeRoutes);
+        }
+
+        private void btDelWaypoint_Click(object sender, EventArgs e)
+        {
+            DeleteWaypoint(_farmingRouteManager, lvWaypoints, cbEscapeRoutes);
+        }
+
+        private void btLoadRoutes_Click(object sender, EventArgs e)
+        {
+            LoadRoutes(_farmingRouteManager, lvWaypoints, cbEscapeRoutes);
+        }
+
+        private void btSaveRoutes_Click(object sender, EventArgs e)
+        {
+            SaveRoutes(_farmingRouteManager);
+        }
+
+        private void rbDoL_CheckedChanged(object sender, EventArgs e)
+        {
+            cbStandStill.Enabled = !rbDoL.Checked;
+        }
+
+        private void cbAlwaysRun_CheckedChanged(object sender, EventArgs e)
+        {
+            if (cbAlwaysRun.Checked) _tweaksHandler.AlwaysRunTimer.Start();
+            else _tweaksHandler.AlwaysRunTimer.Stop();
         }
 
         private void lvWaypoints_SelectedIndexChanged(object sender, EventArgs e)
         {
-            //If nothing is selected then you shouldn't be allowed to delete.
-            //Only start exp farming if you have 2 or more points
-            //Start exp farming from selected waypoint, if none is selected then disable the button
-            //If cbStandStill is checked, it does not matter if anything is selected 
             if (cbStandStill.Checked) return;
-
-            if (lvWaypoints.SelectedItems.Count > 0)
-            {
-                var selectedRoute = Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1;
-                btStartExpFarming.Enabled = RouteManager.Instance.Routes[selectedRoute].Points.Count > 2;
-            }
-            else
-            {
-                btStartExpFarming.Enabled = false;
-            }
+            ListViewButtonFixer(_farmingRouteManager, lvWaypoints, btStartExpFarming);
         }
 
         private void cbStandStill_CheckChanged(object sender, EventArgs e)
@@ -238,100 +268,38 @@ namespace MagBot_FFXIV_v02
                     cb.Checked = false;
                     return;
                 }
-                var escapeRoute = RouteManager.Instance.Routes[cbEscapeRoutes.SelectedIndex];
+                var escapeRoute = _farmingRouteManager.Routes[cbEscapeRoutes.SelectedIndex];
                 btStartExpFarming.Enabled = escapeRoute.Points.Count > 2;
             }
         }
 
-        private void btRecWaypoint_Click(object sender, EventArgs e)
+        private void NewRoute(RouteManager rm, ListView lv, ComboBox escapeRoutes)
         {
-            RecordWaypoint(RouteManager.Instance.Routes.Last());
+            rm.Routes.Add(new Route("Route " + (rm.Routes.Count + 1)));
+            RecordWaypoint(rm, lv, escapeRoutes);
         }
 
-        private void btDelWaypoint_Click(object sender, EventArgs e)
+        private void RecordWaypoint(RouteManager rm, ListView lv, ComboBox escapeRoutes)
         {
-            for (var i = 0; i < lvWaypoints.Items.Count; i++)
+            if (rm.Routes.Count == 0)
             {
-                if (!lvWaypoints.Items[i].Selected) continue;
-                Route route = RouteManager.Instance.Routes[Convert.ToInt32(lvWaypoints.Items[i].SubItems[0].Text) - 1];
-                DelWaypoint(route, route.Points[Convert.ToInt32(lvWaypoints.Items[i].SubItems[1].Text) - 1]);
-            }
-            if (lvWaypoints.Items.Count == 0) btRecWaypoint.Enabled = false;
-        }
-
-        private void UpdateExpFarmingControls()
-        {
-            cbEscapeRoutes.Items.Clear();
-
-            for (var i = 0; i < lvWaypoints.Items.Count; i++)
-            {
-                lvWaypoints.Items[i].Remove();
-                i--;
+                NewRoute(rm, lv, escapeRoutes);
+                return;
             }
 
-            for (var i = 0; i < RouteManager.Instance.Routes.Count; i++)
-            {
-                for (var j = 0; j < RouteManager.Instance.Routes[i].Points.Count; j++)
-                {
-                    var lvi = new ListViewItem((i + 1).ToString(CultureInfo.InvariantCulture), 0);
-                    lvi.SubItems.Add((j + 1).ToString(CultureInfo.InvariantCulture));
-                    lvi.SubItems.Add(RouteManager.Instance.Routes[i].Points[j].X.ToString(CultureInfo.InvariantCulture));
-                    lvi.SubItems.Add(RouteManager.Instance.Routes[i].Points[j].Y.ToString(CultureInfo.InvariantCulture));
-                    lvi.SubItems.Add(RouteManager.Instance.Routes[i].Points[j].Z.ToString(CultureInfo.InvariantCulture));
-                    lvWaypoints.Items.Add(lvi);
-                }
+            var route = rm.Routes.Last();
 
-                cbEscapeRoutes.Items.Add(RouteManager.Instance.Routes[i].Name);
-            }
-
-            if (lvWaypoints.Items.Count <= 0) return;
-            cbEscapeRoutes.SelectedIndex = 0;
-            lvWaypoints.Items[0].Selected = true;
-            btRecWaypoint.Enabled = true;
-            btSaveRoutes.Enabled = true;
-        }
-
-        private void btLoadRoutes_Click(object sender, EventArgs e)
-        {
-            var openFileDialog1 = new OpenFileDialog
-            {
-                Filter = Resources.MainForm_btLoadRoutes_Click_XML_Files___xml____xml,
-                FilterIndex = 1,
-                Multiselect = false
-            };
-
-            if (openFileDialog1.ShowDialog() != DialogResult.OK) return;
-            RouteManager.Instance.LoadRouteManager(openFileDialog1.FileName);
-            UpdateExpFarmingControls();
-        }
-
-        private void btSaveRoutes_Click(object sender, EventArgs e)
-        {
-            var saveFileDialog1 = new SaveFileDialog
-            {
-                Filter = Resources.MainForm_btSaveRoutes_Click_XML_files____xml____xml,
-                DefaultExt = "xml",
-                Title = Resources.MainForm_btSaveRoutes_Click_Save
-            };
-            if (saveFileDialog1.ShowDialog() == DialogResult.OK)
-            {
-                RouteManager.Instance.Save(saveFileDialog1.FileName);
-            }
-        }
-
-        private void RecordWaypoint(Route route)
-        {
             var wp = _player.WaypointLocation;
 
             if (route.Points.Count > 0)
             {
                 for (var i = 0; i < route.Points.Count; i++)
                 {
-                    double distanceBetweenTargets = route.Points[i].Distance(wp);
+                    var distanceBetweenTargets = route.Points[i].Distance(wp);
 
                     if (!(distanceBetweenTargets < 4)) continue;
-                    MessageBox.Show(Resources.ExpFarming_RecordWaypoint_Point_too_close_to_one_of_the_other_points_,
-                        Resources.ExpFarming_RecordWaypoint_Error,
+                    MessageBox.Show(@"Point too close to one of the other points.",
+                        @"Error",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Exclamation,
                         MessageBoxDefaultButton.Button1);
@@ -340,18 +308,105 @@ namespace MagBot_FFXIV_v02
             }
 
             route.Points.Add(wp);
-            UpdateExpFarmingControls();
+            UpdateWaypointList(rm, lv, escapeRoutes);
         }
 
-        private void DelWaypoint(Route route, Waypoint waypoint)
+        private void DeleteWaypoint(RouteManager rm, ListView lv, ComboBox escapeRoutes)
         {
-            route.Points.Remove(waypoint);
-            if (route.Points.Count == 0)
+            for (var i = 0; i < lv.Items.Count; i++)
             {
-                RouteManager.Instance.Routes.Remove(route);
+                if (!lv.Items[i].Selected) continue;
+                var route = rm.Routes[Convert.ToInt32(lv.Items[i].SubItems[0].Text) - 1];
+                var waypoint = route.Points[Convert.ToInt32(lv.Items[i].SubItems[1].Text) - 1];
+
+                route.Points.Remove(waypoint);
+                if (route.Points.Count == 0)
+                {
+                    rm.Routes.Remove(route);
+                }
+                UpdateWaypointList(rm, lv, escapeRoutes);
             }
-            UpdateExpFarmingControls();
-            if (RouteManager.Instance.Routes.Count == 0) btStartExpFarming.Enabled = false;
+        }
+
+        private void LoadRoutes(RouteManager rm, ListView lv, ComboBox escapeRoutes)
+        {
+            var openFileDialog1 = new OpenFileDialog
+            {
+                Filter = @"XML Files (.xml)|*.xml",
+                FilterIndex = 1,
+                Multiselect = false
+            };
+
+            if (openFileDialog1.ShowDialog() != DialogResult.OK) return;
+            rm.LoadRouteManager(openFileDialog1.FileName);
+            UpdateWaypointList(rm, lv, escapeRoutes);
+        }
+
+        private void SaveRoutes(RouteManager rm)
+        {
+            if (rm.Routes.Count == 0 || rm.Routes.Any(route => route.Points.Count < 3))
+            {
+                Globals.Instance.ShowMessage(@"Please add at least three points to every route before saving.", @"Save Error");
+                return;
+            }
+
+            var saveFileDialog1 = new SaveFileDialog
+            {
+                Filter = @"XML files (*.xml)|*.xml",
+                DefaultExt = "xml",
+                Title = @"Save"
+            };
+            if (saveFileDialog1.ShowDialog() == DialogResult.OK)
+            {
+                rm.Save(saveFileDialog1.FileName);
+            }
+        }
+
+        private void UpdateWaypointList(RouteManager rm, ListView lv, ComboBox escapeRoutes)
+        {
+            escapeRoutes.Items.Clear();
+
+            for (var i = 0; i < lv.Items.Count; i++)
+            {
+                lv.Items[i].Remove();
+                i--;
+            }
+
+            for (var i = 0; i < rm.Routes.Count; i++)
+            {
+                for (var j = 0; j < rm.Routes[i].Points.Count; j++)
+                {
+                    var lvi = new ListViewItem((i + 1).ToString(CultureInfo.InvariantCulture), 0);
+                    lvi.SubItems.Add((j + 1).ToString(CultureInfo.InvariantCulture));
+                    lvi.SubItems.Add(rm.Routes[i].Points[j].X.ToString(CultureInfo.InvariantCulture));
+                    lvi.SubItems.Add(rm.Routes[i].Points[j].Y.ToString(CultureInfo.InvariantCulture));
+                    lvi.SubItems.Add(rm.Routes[i].Points[j].Z.ToString(CultureInfo.InvariantCulture));
+                    lv.Items.Add(lvi);
+                }
+
+                escapeRoutes.Items.Add(rm.Routes[i].Name);
+            }
+
+            if (lv.Items.Count <= 0) return;
+            escapeRoutes.SelectedIndex = 0;
+            lv.Items[0].Selected = true;
+        }
+
+        private void ListViewButtonFixer(RouteManager rm, ListView lv, Button startButton)
+        {
+            //If nothing is selected then you shouldn't be allowed to delete.
+            //Only start exp farming if you have 2 or more points
+            //Start exp farming from selected route, if none is selected then disable the button
+            //If cbStandStill is checked, it does not matter if anything is selected 
+            if (lv.SelectedItems.Count > 0)
+            {
+                var selectedRoute = Convert.ToInt32(lv.SelectedItems[0].Text) - 1;
+                startButton.Enabled = rm.Routes[selectedRoute].Points.Count > 2;
+            }
+            else
+            {
+                startButton.Enabled = false;
+            }
         }
 
         //Not ideal way to communicate with UI, because
@@ -375,12 +430,15 @@ namespace MagBot_FFXIV_v02
             if (label != null) label.Text = text;
         }
 
-        public void StopScanning()
+        public string GetText(string labelName)
         {
-            if (!ClosePending) return;
-            const string message = "Worker-thread is closing the application...";
-            Globals.Instance.ApplicationLogger.Log(message);
-            Close();
+            var label = (Label)Controls.Find(labelName, true).FirstOrDefault();
+            return label != null ? label.Text : null;
+        }
+
+        public void AddToChatLog(string text)
+        {
+            tbChatLog.AppendText(Environment.NewLine + text);
         }
 
         private void DisableChildrenControls(Control con)
@@ -417,21 +475,24 @@ namespace MagBot_FFXIV_v02
             var mp = _player.MP.ToString(CultureInfo.InvariantCulture);
             var maxMp = _player.MaxMP.ToString(CultureInfo.InvariantCulture);
             var tp = _player.TP.ToString(CultureInfo.InvariantCulture);
-            var maxTp = _player.MaxTP.ToString(CultureInfo.InvariantCulture);
+            var gp = _player.GP.ToString(CultureInfo.InvariantCulture);
+            var maxGp = _player.MaxGP.ToString(CultureInfo.InvariantCulture);
             var xCoor = _player.XCoordinate.ToString(CultureInfo.InvariantCulture);
             var yCoor = _player.YCoordinate.ToString(CultureInfo.InvariantCulture);
             var zCoor = _player.ZCoordinate.ToString(CultureInfo.InvariantCulture);
             var facing = _player.FacingAngle.ToString(CultureInfo.InvariantCulture);
 
-            var combinedMessage = "HP: " + hp + "/" + maxHp + Environment.NewLine + "MP: " + mp + "/" + maxMp + Environment.NewLine + "TP: " + tp + "/" + maxTp + Environment.NewLine + "X, Y, Z: " + xCoor + ", " + yCoor + ", " + zCoor + Environment.NewLine + "Facing direction (radians): " + facing;
+            var combinedMessage = "HP: " + hp + "/" + maxHp + Environment.NewLine + ". MP: " + mp + "/" + maxMp + Environment.NewLine + ". TP: " + tp + ". GP: " + gp + "/" + maxGp + Environment.NewLine + ". X, Y, Z: " + xCoor + ", " + yCoor + ", " + zCoor + Environment.NewLine + "Facing direction (radians): " + facing;
 
             Globals.Instance.ShowMessage(combinedMessage);
         }
 
-        public string ChatLog
+        public void StopScanning()
         {
-            get { return lbChatLog.Text; }
-            set { lbChatLog.Items.Add(value); }
+            if (!ClosePending) return;
+            const string message = "External thread is closing the application...";
+            Globals.Instance.ApplicationLogger.Log(message);
+            Close();
         }
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -449,9 +510,9 @@ namespace MagBot_FFXIV_v02
                 //FormClosing event raised by program or the X in top right corner
                 //Do cleanup work (stop threads and clean up unmanaged resources)
 
-                if (_bw != null && !_bw.MRE.WaitOne(0))
+                if (_chatLogMre != null &&!_chatLogMre.WaitOne(0))
                 {
-                    _bw.MRE.Set(); //This exits the loop
+                    _chatLogMre.Set(); //This exits the loops
                     ClosePending = true;
                     e.Cancel = true;
                     return;
@@ -459,11 +520,13 @@ namespace MagBot_FFXIV_v02
 
                 if (Globals.Instance.ApplicationLogger != null) Globals.Instance.ApplicationLogger.Log("FormClosing event raised by program. Cleaning up resources, then exiting application...");
 
-                if (_expFarming != null)
+                if (_farmingHandler != null)
                 {
-                    if (_expFarmingThread != null && !_expFarming.Cancel.WaitOne(0)) btStopExpFarming_Click(sender, e);
-                    if (_expFarmingThread != null && _expFarmingThread.IsAlive) _expFarmingThread.Join(); //Wait with disposing ExpFarmingLogger until thread is terminated
-                    Globals.Instance.ExpFarmingLogger.Dispose();
+                    if (_farmingThread != null && !_farmingHandler.FarmingMre.WaitOne(0)) btStopExpFarming_Click(sender, e);
+                    Console.WriteLine("HERE");
+                    if (_farmingThread != null && _farmingThread.IsAlive) _farmingThread.Join(); //Wait with disposing GameLogger until thread is terminated
+                    Console.WriteLine("NOT HERE");
+                    Globals.Instance.GameLogger.Dispose();
                 }
 
                 MemoryHandler.Instance.Dispose();

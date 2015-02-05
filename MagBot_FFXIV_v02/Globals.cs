@@ -34,9 +34,7 @@ namespace MagBot_FFXIV_v02
         
         //Loggers
         public Logger ApplicationLogger { get; set; }
-        public Logger ExpFarmingLogger { get; set; }
-
-        //public SkillCollection Skills { get; private set; }
+        public Logger GameLogger { get; set; }
 
         private delegate DialogResult ShowMessagehandler(string message, string caption, MessageBoxButtons buttons, MessageBoxIcon icon);
         public DialogResult ShowMessage(string message, string caption = "", MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None)
@@ -83,7 +81,7 @@ namespace MagBot_FFXIV_v02
                             .ToDictionary(e => e.Name.LocalName,
                                 e =>
                                     new Skill(e.Name.LocalName, (float)e.Element("Cast"), (float)e.Element("ReCast"),
-                                        (int)e.Element("MPCost"), (int)e.Element("Button")));
+                                        (int)e.Element("Cost"), (string)e.Element("Button")));
 
                 //Use XML deserialization to create an instance of SkillCollection class
                 //Skills = (SkillCollection)SkillCollection.DataContractSerializer_Deserialize(Path.Combine(path, "Skills.xml"), typeof(SkillCollection));
@@ -100,28 +98,6 @@ namespace MagBot_FFXIV_v02
                 ShowMessage("Required files not found, exiting application...");
                 Application.Exit();
             }
-
-
-            //Load Timers list
-            //foreach (var entry in OffsetDictionary)
-            //{
-            //    Console.WriteLine("Key: " + entry.Key + ". Value: " + entry.Value);
-            //}
-
-            //foreach (var entry in MemoryBaseOffsetDictionary)
-            //{
-            //    Console.WriteLine("Key: " + entry.Key + ". Value: " + entry.Value);
-            //}
-
-            //foreach (var entry in MemoryAdditionalOffsetDictionary)
-            //{
-            //    Console.WriteLine("Key: " + entry.Key + ". Value: " + entry.Value);
-            //}
-
-            //foreach (var entry in TimerDictionary)
-            //{
-            //    Console.WriteLine("Key: " + entry.Key + ". Value: " + entry.Value);
-            //}
         }
     }
 }

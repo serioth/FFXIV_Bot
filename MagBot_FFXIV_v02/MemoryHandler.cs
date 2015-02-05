@@ -676,6 +676,7 @@ namespace MagBot_FFXIV_v02
             // read the memory into a buffer
             int cnt;
             byte[] buffer;
+            //Console.WriteLine(@"String Length: " + maxLen);
             MemoryResult result = ReadMemory(address, maxLen, out cnt, out buffer);
             // Calls error handler if needed so we do not have to here
 

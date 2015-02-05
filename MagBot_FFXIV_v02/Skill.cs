@@ -13,7 +13,7 @@ namespace MagBot_FFXIV_v02
         public string Name { get; private set; }
         public int Cast { get; private set; }
         public int ReCast { get; set; }
-        public int MPCost { get; private set; }
+        public int Cost { get; private set; }
         public char Button { get; private set; }
 
         //[XmlIgnore]
@@ -30,13 +30,13 @@ namespace MagBot_FFXIV_v02
             Timer.Elapsed += OnTimedEvent;
         }
 
-        public Skill(string name, float cast, float reCast, int mpCost, int button)
+        public Skill(string name, float cast, float reCast, int cost, string button)
         {
             Name = name;
             Cast = (int)(cast*1000);
             ReCast = (int)(reCast*1000);
-            MPCost = mpCost;
-            Button = button.ToString(CultureInfo.InvariantCulture)[0];
+            Cost = cost;
+            Button = button[0];
 
             Ready = true;
 
@@ -63,7 +63,7 @@ namespace MagBot_FFXIV_v02
             }
         }
 
-        public void PostCreateLogic()
+        private void PostCreateLogic()
         {
             Cast = Cast * 1000;
             ReCast = ReCast * 1000;

@@ -8,15 +8,9 @@ namespace MagBot_FFXIV_v02
 {
     class RouteManager //This class will eventually create a list of multiple routes. For now load one route with static LoadFile
     {
-        private static readonly RouteManager RouteManagerInstance = new RouteManager();
-        static RouteManager() { }
-        private RouteManager()
+        public RouteManager()
         {
             Routes = new List<Route>();
-        }
-        public static RouteManager Instance
-        {
-            get { return RouteManagerInstance; }
         }
 
         public readonly List<Route> Routes;

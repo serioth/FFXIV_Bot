@@ -1,5 +1,8 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace MagBot_FFXIV_v02
@@ -14,7 +17,7 @@ namespace MagBot_FFXIV_v02
         private PetInfo PetInfo { get; set; }
 
         //OUTCOMES: canceled (break), dead (StopApp()), aggro (as appropriate), success (only if we define an end goal)
-        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
+        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, int distanceTreshold, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
         {
             //Start and stop of running must be done outside of this method
             string outcome = null;
@@ -23,8 +26,8 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.KeySenderInstance.SendDown(Keys.W);
             while (!mre.WaitOne(0))
             {
-                Globals.Instance.ExpFarmingLogger.Log("RunToPoint(): Route " + RouteManager.Instance.Routes.IndexOf(route)  +". Point " + route.Points.IndexOf(wp));
-                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, out target, ExpFarming.PointTurnDistance, mre); //This lambda represents a method that just returns wp
+                Globals.Instance.GameLogger.Log("RunToPoint(): " + route.Name  +". Point " + route.Points.IndexOf(wp));
+                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, out target, distanceTreshold, mre); //This lambda represents a method that just returns wp
                 if (outcome == "canceled" || outcome == "dead" || outcome == "enemy" || outcome == "aggro") break;
                 if (outcome == "success") if (goalWp > -1 && wp == route.Points[goalWp]) break;
                 if (outcome == "stuck") //This will go forever, if it cannot get unstuck
@@ -35,7 +38,7 @@ namespace MagBot_FFXIV_v02
 
                 wp = oppositeWay ? route.PreviousWaypoint(wp) : route.NextWaypoint(wp);
             }
-            if (mre.WaitOne(0)) outcome = "canceled"; //Cancel can happen after RunToPoint(), in which case this fixes outcome
+            if (mre.WaitOne(0)) outcome = "canceled"; //FarmingMre can happen after RunToPoint(), in which case this fixes outcome
             Globals.Instance.KeySenderInstance.SendUp(Keys.W);
             return outcome;
         }
@@ -45,7 +48,7 @@ namespace MagBot_FFXIV_v02
         //canceled: Can either be by user or by program. In any case, just return
         //dead: We want to end the program. Return outcome up call tree and at highest level call StopApp()
         //aggro: Propagate and handle
-        //stuck: We cannot do anything else here. Return outcome up one level and decide how to deal with it
+        //stuck: We cannot do anything else here. Return outcome up one level and decide how to deal with it ---> NEW: Let's just do Turn180() on all of them!
             //If pursuing aggressor: wait and attack
             //If pursuing enemy: return outcome up call tree and proceed to look for next enemy
             //If pursuing point: return outcome up one level, Turn180() and select next point
@@ -56,10 +59,19 @@ namespace MagBot_FFXIV_v02
             var outcome = "success";
             target = null;
             if (stopAtEnd) Globals.Instance.KeySenderInstance.SendDown(Keys.W);
-            while ((wp().Distance(WaypointLocation) > distanceTreshold))
+
+            //Stopwatch is for jumping logic
+            var sw = new Stopwatch();
+            sw.Start();
+            var previousDistance = wp().Distance(WaypointLocation);
+            var previousTime=new TimeSpan(0,0,0); //hr, min, sec
+
+            while ((WaypointLocation.Distance(wp()) > distanceTreshold))
             {
                 //Slowing down of loop is done in JumpIfStuck()
                 Face(wp(), distanceTreshold, mre);
+
+                if (!aggroCheck && !enemyCheck) mre.WaitOne(200); // Just to slow it down (aggroCheck and enemyCheck normally slows it down)
 
                 if (mre.WaitOne(0))
                 {
@@ -89,25 +101,27 @@ namespace MagBot_FFXIV_v02
                         break;
                     }
                 }
-                if (JumpIfStuck(wp(), mre) == "stuck")
+                if (sw.Elapsed >= previousTime.Add(new TimeSpan(0, 0, 1)))
                 {
+                    if (JumpIfStuck(ref previousTime, ref previousDistance, wp(), mre) != "stuck") continue;
                     outcome = "stuck";
                     break;
                 }
             }
-            if (stopAtEnd) Globals.Instance.KeySenderInstance.SendUp(Keys.W);
-            Globals.Instance.ExpFarmingLogger.Log("RunToPoint() completed. Outcome: " + outcome);
+            sw.Stop();
+            if (stopAtEnd &&  outcome != "stuck") Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            Globals.Instance.GameLogger.Log("RunToPoint() completed. Outcome: " + outcome);
             return outcome;
         }
 
-        public string RunToEnemy(Character target, bool aggroCheck, ManualResetEvent mre, out Character aggressor)
+        public string RunToTarget(Character target, bool aggroCheck, int distanceTreshold, ManualResetEvent mre, out Character aggressor)
         {
             //The lambda represents a method that runs and returns target.WaypointLocation
-            Globals.Instance.ExpFarmingLogger.Log("RunToPoint(): Enemy.");
-            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, out aggressor, ExpFarming.FightingDistance, mre);
+            Globals.Instance.GameLogger.Log("RunToPoint(): Target.");
+            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, out aggressor, distanceTreshold, mre);
         }
 
-        private void Face(Waypoint pt, int distanceTreshold, ManualResetEvent mre)
+        private void Face(Waypoint pt, double distanceTreshold, ManualResetEvent mre)
         {
             var angleDiff = FacingAngle - pt.Angle(WaypointLocation);
             var absAngleDiff = Math.Abs(angleDiff);
@@ -143,28 +157,45 @@ namespace MagBot_FFXIV_v02
             return !(absAngleDiff > 0.15);
         }
 
-        //This can potentially delay the stopping of the program by the total of the two sleeps
-        private string JumpIfStuck(Waypoint target, ManualResetEvent mre)
+        //This can delays enemy search
+        private string JumpIfStuck(ref TimeSpan previousTime, ref double previousDistance, Waypoint target, WaitHandle mre)
         {
-            var oldDistance = WaypointLocation.Distance(target);
-            mre.WaitOne(500);
-            if (WaypointLocation.Distance(target) < oldDistance) return null;
+            //var oldDistance = WaypointLocation.Distance(target);
+            //mre.WaitOne(500);
+            //if (WaypointLocation.Distance(target) < oldDistance) return null;
 
+            //for (var jumpCount = 0; jumpCount < 3; jumpCount++)
+            //{
+            //    Globals.Instance.GameLogger.Log("Stuck, jumping...");
+            //    Globals.Instance.KeySenderInstance.SendKey(Keys.Space);
+            //    if (mre.WaitOne(500)) return "canceled";
+            //    if (WaypointLocation.Distance(target) < oldDistance) return "jump ok";
+            //}
+            //return "stuck";
+            
+            //Jumping logic
+            //If stopwatch is one second more than it was before, check against previous distance, set new distance and set stopWatch
+            previousTime = previousTime.Add(new TimeSpan(0, 0, 1));
+            if (WaypointLocation.Distance(target) < previousDistance)
+            {
+                previousDistance = WaypointLocation.Distance(target);
+                return "ok";
+            }
             for (var jumpCount = 0; jumpCount < 3; jumpCount++)
             {
-                Globals.Instance.ExpFarmingLogger.Log("Stuck, jumping...");
+                Globals.Instance.GameLogger.Log("Stuck, jumping...");
                 Globals.Instance.KeySenderInstance.SendKey(Keys.Space);
-                if (mre.WaitOne(500)) return "canceled";
-                if (WaypointLocation.Distance(target) < oldDistance) return "jump ok";
+                if (mre.WaitOne(1000)) return "canceled";
+                if (WaypointLocation.Distance(target) < previousDistance*0.90) return "jump ok";
             }
             return "stuck";
         }
 
-        //OUTCOMES: success, canceled, escape
         public string AttackTarget(Character target, ManualResetEvent mre, bool aggressor)
         {
-            Globals.Instance.ExpFarmingLogger.Log("AttackTarget() initiated. Target: " + target.Name + ", Level: " + target.Level);
-            int targetLevelOneAddress = Globals.Instance.MemoryBaseOffsetDictionary["Target1"];
+            Globals.Instance.GameLogger.Log("AttackTarget() initiated. Target: " + target.Name + ", Level: " + target.Level);
+
+            var targetLevelOneAddress = Globals.Instance.MemoryBaseOffsetDictionary["Target1"];
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0); //Engage enemy
             if (!aggressor) PreBattleAndPull(mre);
 
@@ -172,34 +203,110 @@ namespace MagBot_FFXIV_v02
             {
                 if (mre.WaitOne(0))
                 {
-                    Globals.Instance.ExpFarmingLogger.Log("AttackTarget() canceled.");
+                    Globals.Instance.GameLogger.Log("AttackTarget() canceled.");
                     return "canceled";
                 }
 
                 if (SummonerAttackPattern(target, mre) == "escape")
                 {
-                    Globals.Instance.ExpFarmingLogger.Log("Escape initiated in AttackTarget().");
+                    Globals.Instance.GameLogger.Log("Escape initiated in AttackTarget().");
                     return "escape";
                 }
 
-                if ((WaypointLocation.Distance(target.WaypointLocation) > ExpFarming.MaxPullingDistance) || !HasTarget(targetLevelOneAddress))
+                if ((WaypointLocation.Distance(target.WaypointLocation) > FarmingHandler.MaxPullingDistance) || !HasTarget(targetLevelOneAddress))
                 {
-                    Globals.Instance.ExpFarmingLogger.Log("Enemy escaped/lost, returning success");
+                    Globals.Instance.GameLogger.Log("Enemy escaped/lost, returning success");
                     break;
                 }
                 if (HP == 0)
                 {
-                    Globals.Instance.ExpFarmingLogger.Log("Died in AttackTarget().");
+                    Globals.Instance.GameLogger.Log("Died in AttackTarget().");
                     return "dead";
                 }
             }
-            Globals.Instance.ExpFarmingLogger.Log("AttackTarget() completed, enemy dead or escaped.");
+            Globals.Instance.GameLogger.Log("AttackTarget() completed, enemy dead or escaped.");
             return "success";
+        }
+
+        public string Gather(ManualResetEvent mre)
+        {
+            Globals.Instance.GameLogger.Log("Gather() initiated...");
+            PreGather(mre);
+
+            var count = 0;
+            while (HasTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target1"]))
+            {
+                if (mre.WaitOne(0))
+                {
+                    Globals.Instance.GameLogger.Log("Gather() canceled.");
+                    return "canceled";
+                }
+
+                if (HpLow(0.8))
+                {
+                    Globals.Instance.GameLogger.Log("Escape in Gather().");
+                    return "escape";
+                }
+
+                if (HP == 0)
+                {
+                    Globals.Instance.GameLogger.Log("Died in Gather().");
+                    return "dead";
+                }
+
+                //Engage
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
+                mre.WaitOne(Utils.getRandom(2600, 3000));
+                count++;
+
+                if (count > 7)
+                {
+                    //For some reason we have not been able to reach target, so lock, move forward and circle around target and try again
+                    Globals.Instance.GameLogger.Log("Could not reach target, attempting to reposition.");
+                    Reposition(mre);
+                    PreGather(mre);
+                }
+            }
+
+            //To turn off Stealth
+            Task.Run(() =>
+            {
+                Task.Delay(2000);
+                UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
+            });
+
+            return "success";
+        }
+
+        private bool HpLow(double tresholdPercent)
+        {
+            return HP < MaxHP*tresholdPercent;
+        }
+
+        private bool MpLow(double tresholdPercent)
+        {
+            return MP < MaxMP * tresholdPercent;
+        }
+
+        private void PreGather(ManualResetEvent mre)
+        {
+            UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
+            mre.WaitOne(1000);
+
+            //SPELLS
+            //It will always use only the lower GP cost spell, because we do not regenerate GP fast enough
+            //So if we are leveling, choose FieldMaster. If we are farming for items, choose other ones (maybe randomize)
+            //LeafTurn increases HQ, which increases XP earned though. So keep that in mind when leveling
+            UseSkill(Globals.Instance.SkillDictionary["FieldMastery"], mre, false, true);
+            //UseSkill(Globals.Instance.SkillDictionary["LeafTurn"], mre, false, true);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
+            mre.WaitOne(Utils.getRandom(2600, 3000));
         }
 
         private void WaitForRegen(ManualResetEvent mre)
         {
-            if (MP < MaxMP * 0.6) Globals.Instance.ExpFarmingLogger.Log("MP < 60%. Waiting for MP to restore...");
+            if (MP < MaxMP * 0.6) Globals.Instance.GameLogger.Log("MP < 60%. Waiting for MP to restore...");
             while ((MP < MaxMP * 0.6))
             {
                 if (mre.WaitOne(0)) return;
@@ -207,12 +314,20 @@ namespace MagBot_FFXIV_v02
             }
         }
 
+        public int GetXp()
+        {
+            var xpPointer = MemoryHandler.Instance.GetPointerFromOffsets(new[] { Globals.Instance.MemoryBaseOffsetDictionary["XP"] });
+            int xp;
+            MemoryHandler.Instance.ReadInt(xpPointer, out xp);
+            return xp;
+        }
+
         private string RestoreHP(ManualResetEvent mre)
         {
-            while (HP < (MaxHP * 0.8))
+            while (HpLow(0.8))
             {
                 if (mre.WaitOne(0)) return "canceled";
-                if ((MP < (MaxMP * 0.3)) || HP < MaxHP * 0.5)
+                if (MpLow(0.3) || HpLow(0.5))
                 {
                     return "escape";
                 }
@@ -240,14 +355,43 @@ namespace MagBot_FFXIV_v02
             var target = GetTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target1"]);
             if (target == null) return null;
 
-            if (target.Level > Level + ExpFarming.MaxEnemyLevelDiff)
+            if (target.HP > HP + 2000) //Level property does not work anymore
             {
-                Globals.Instance.ExpFarmingLogger.Log(target.Name + "'s level (" + target.Level + ") too high, skipping...");
+                Globals.Instance.GameLogger.Log(target.Name + "'s level (" + target.Level + ") too high, skipping...");
+                mre.WaitOne(300);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.Escape);
+                return null;
+            }
+
+            if (!EnemyValid(target))
+            {
+                Globals.Instance.GameLogger.Log("Invalid enemy. Skipping...");
                 mre.WaitOne(300);
                 Globals.Instance.KeySenderInstance.SendKey(Keys.Escape);
                 return null;
             }
             return target;
+        }
+
+        public Character NpcCheck(ManualResetEvent mre)
+        {
+            Globals.Instance.KeySenderInstance.SendKey(Keys.F12);
+            mre.WaitOne(200);
+            var target = GetTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target1"]);
+            if (target == null) return null;
+
+            if (!EnemyValid(target))
+            {
+                Globals.Instance.GameLogger.Log("Invalid target. Skipping...");
+                return null;
+            }
+            return target;
+        }
+
+        private bool EnemyValid(Character target)
+        {
+            var enemyOk = FarmingHandler.EnemyList.Length == 0 || FarmingHandler.EnemyList.Any(enemy => target.Name.Contains(enemy));
+            return enemyOk;
         }
 
         private static Character GetTarget(int targetBaseOffset)
@@ -264,32 +408,44 @@ namespace MagBot_FFXIV_v02
         {
             //This checks whether or not we are actually targeting something
             int lvlOneValue;
-            IntPtr targetPointer = MemoryHandler.Instance.GetLvlOneAddressFromBaseOffset(targetBaseOffset);
+            var targetPointer = MemoryHandler.Instance.GetLvlOneAddressFromBaseOffset(targetBaseOffset);
             MemoryHandler.Instance.ReadInt(targetPointer, out lvlOneValue);
             return lvlOneValue > 0;
         }
 
-        private void UseSkill(Skill skill, ManualResetEvent mre)
+        public void UseSkill(Skill skill, ManualResetEvent mre, bool ctrl = false, bool gp = false)
         {
-            if (skill.Ready != true || !(MP > skill.MPCost)) return;
+            var myAmount = gp ? GP : MP;
+            if (skill.Cost != 0 && myAmount < skill.Cost) return;
+            if (skill.Ready != true) return;
             if (mre.WaitOne(0)) return;
 
-            Globals.Instance.ExpFarmingLogger.Log("Using skill: " + skill.Name);
+            Globals.Instance.GameLogger.Log("Using skill: " + skill.Name + ". Button: " + skill.Button);
 
-            Globals.Instance.KeySenderInstance.SendKey(Globals.Instance.KeySenderInstance.ToKey(skill.Button));
+            if (ctrl)
+            {
+                Globals.Instance.KeySenderInstance.SendKey(Globals.Instance.KeySenderInstance.ToKey(skill.Button), KeySender.ModifierControl);
+            }
+            else
+            {
+                Globals.Instance.KeySenderInstance.SendKey(Globals.Instance.KeySenderInstance.ToKey(skill.Button));
+            }
 
             skill.Timer.Start();
             skill.Ready = false;
 
             //After initiating the skill we need to sleep until it is finished casting
             //Sleep amount = random number from the time it takes to cast up to a second longer
-            mre.WaitOne(Utils.getRandom(skill.Cast + 500, skill.Cast + 800));
+            //200 and 500 worked, trying lower
+            mre.WaitOne(Utils.getRandom(skill.Cast + 0, skill.Cast + 300));
         }
 
         private void PreBattleAndPull(ManualResetEvent mre)
         {
             if (PetInfo.PetHP < 250) UseSkill(Globals.Instance.SkillDictionary["SummonII"], mre);
-            Globals.Instance.KeySenderInstance.SendKey(Keys.D2, KeySender.ModifierControl); //Pet Obey+Curl Macro
+            UseSkill(Globals.Instance.SkillDictionary["Curl"], mre, true); //Curl for 20sec
+            mre.WaitOne(Utils.getRandom(100, 200));
+            Globals.Instance.KeySenderInstance.SendKey(Keys.D1, KeySender.ModifierControl); //Pet Obey on target
             mre.WaitOne(Utils.getRandom(3000,4000));
         }
 
@@ -299,8 +455,12 @@ namespace MagBot_FFXIV_v02
             if (PetInfo.PetHP < 250)
             {
                 UseSkill(Globals.Instance.SkillDictionary["SummonII"], mre);
-                Globals.Instance.KeySenderInstance.SendKey(Keys.D2, KeySender.ModifierControl); //Pet Sic Macro
+                Globals.Instance.KeySenderInstance.SendKey(Keys.D1, KeySender.ModifierControl); //Pet Obey on target
             }
+
+            if (RestoreHP(mre) == "escape") return "escape";
+            UseSkill(Globals.Instance.SkillDictionary["Sustain"], mre);
+            if (target.HP <= 0) return "success";
 
             if (RestoreHP(mre) == "escape") return "escape";
             UseSkill(Globals.Instance.SkillDictionary["Sustain"], mre);
@@ -310,6 +470,7 @@ namespace MagBot_FFXIV_v02
             UseSkill(Globals.Instance.SkillDictionary["Aetherflow"], mre);
             UseSkill(Globals.Instance.SkillDictionary["EnergyDrain"], mre);
             UseSkill(Globals.Instance.SkillDictionary["Virus"], mre);
+            UseSkill(Globals.Instance.SkillDictionary["Curl"], mre, true);
             if (target.HP <= 0) return "success";
 
             if (RestoreHP(mre) == "escape") return "escape";
@@ -331,16 +492,41 @@ namespace MagBot_FFXIV_v02
         }
 
         //If we cancel (mre is set), then no blocking occurs and we just fall through
-        private static void Turn180(ManualResetEvent mre)
+        public static void Turn180(ManualResetEvent mre)
         {
-            Globals.Instance.ExpFarmingLogger.Log("Turn180() initiated...");
+            Globals.Instance.GameLogger.Log("Turn180() initiated...");
             if (!mre.WaitOne(0))
             {
-                Globals.Instance.KeySenderInstance.SendDown(Keys.A);
-                mre.WaitOne(800); //Turn 90 degrees
-                Globals.Instance.KeySenderInstance.SendUp(Keys.A);
-                mre.WaitOne(1500); //Run sideways for a bit
+                var random = Utils.getRandom(0, 10);
+                var random2 = Utils.getRandom(0, 1);
+                if (random < 5)
+                {
+                    Globals.Instance.KeySenderInstance.SendDown(random2 == 0 ? Keys.A : Keys.D);
+                    mre.WaitOne(800); //Turn 90 degrees
+                }
+                else
+                {
+                    Globals.Instance.KeySenderInstance.SendDown(random2 == 0 ? Keys.A : Keys.D);
+                    mre.WaitOne(1500); //Turn 180 degrees
+                }
+                Globals.Instance.KeySenderInstance.SendUp(random2 == 0 ? Keys.A : Keys.D);
+                mre.WaitOne(1500); //Run straight for a bit
             }
+        }
+
+        private void Reposition(WaitHandle mre)
+        {
+            Globals.Instance.GameLogger.Log("Reposition() initiated...");
+            if (mre.WaitOne(0)) return;
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+            mre.WaitOne(300);
+            Globals.Instance.KeySenderInstance.SendDown(Keys.W);
+            mre.WaitOne(2000);
+            Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            mre.WaitOne(300);
+            Globals.Instance.KeySenderInstance.SendDown(Keys.A);
+            mre.WaitOne(800); //Turn 90 degrees
+            Globals.Instance.KeySenderInstance.SendUp(Keys.A);
         }
     }
 
