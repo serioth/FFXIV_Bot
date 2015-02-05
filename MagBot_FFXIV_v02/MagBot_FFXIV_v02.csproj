@@ -121,7 +121,6 @@
   <ItemGroup>
     <Compile Include="ChatLogHandler.cs" />
     <Compile Include="FarmingHandler.cs" />
-    <Compile Include="FarmingHandler2.cs" />
     <Compile Include="Globals.cs" />
     <Compile Include="KeySender.cs" />
     <Compile Include="Logger.cs" />

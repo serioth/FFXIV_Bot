@@ -6,7 +6,7 @@ using System.Windows.Forms;
 
 namespace MagBot_FFXIV_v02
 {
-    internal class FarmingHandler2
+    internal class FarmingHandler
     {
         private readonly Player _player;
         public readonly ManualResetEvent FarmingMre;
@@ -24,7 +24,7 @@ namespace MagBot_FFXIV_v02
         private int _preBattleXp;
         public static string[] EnemyList; //Bad paractice, but needed access to this list in EnemyCheck(), which in turn is called from both methods in this class and in Player
 
-        public FarmingHandler2(Player player)
+        public FarmingHandler(Player player)
         {
             _player = player;
             FarmingMre = new ManualResetEvent(false);
