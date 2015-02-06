@@ -523,9 +523,7 @@ namespace MagBot_FFXIV_v02
                 if (_farmingHandler != null)
                 {
                     if (_farmingThread != null && !_farmingHandler.FarmingMre.WaitOne(0)) btStopExpFarming_Click(sender, e);
-                    Console.WriteLine("HERE");
                     if (_farmingThread != null && _farmingThread.IsAlive) _farmingThread.Join(); //Wait with disposing GameLogger until thread is terminated
-                    Console.WriteLine("NOT HERE");
                     Globals.Instance.GameLogger.Dispose();
                 }
 

@@ -17,7 +17,7 @@ namespace MagBot_FFXIV_v02
         private PetInfo PetInfo { get; set; }
 
         //OUTCOMES: canceled (break), dead (StopApp()), aggro (as appropriate), success (only if we define an end goal)
-        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, int distanceTreshold, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
+        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
         {
             //Start and stop of running must be done outside of this method
             string outcome = null;
@@ -27,10 +27,10 @@ namespace MagBot_FFXIV_v02
             while (!mre.WaitOne(0))
             {
                 Globals.Instance.GameLogger.Log("RunToPoint(): " + route.Name  +". Point " + route.Points.IndexOf(wp));
-                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, out target, distanceTreshold, mre); //This lambda represents a method that just returns wp
-                if (outcome == "canceled" || outcome == "dead" || outcome == "enemy" || outcome == "aggro") break;
+                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, gathering, out target, distanceTreshold, mre); //This lambda represents a method that just returns wp
+                if (outcome == "canceled" || outcome == "dead" || outcome == "target" || outcome == "aggro") break;
                 if (outcome == "success") if (goalWp > -1 && wp == route.Points[goalWp]) break;
-                if (outcome == "stuck") //This will go forever, if it cannot get unstuck
+                if (outcome == "stuck") //This will go forever, if it cannot get unstuck. It runs to same wp. Should we perhaps pick a new point?
                 {
                     Turn180(mre);
                     continue;
@@ -53,7 +53,7 @@ namespace MagBot_FFXIV_v02
             //If pursuing enemy: return outcome up call tree and proceed to look for next enemy
             //If pursuing point: return outcome up one level, Turn180() and select next point
         //success: return outcome up one level and proceed as appropriate
-        private string RunToPoint(Func<Waypoint> wp, bool enemyCheck, bool aggroCheck, bool stopAtEnd, out Character target, int distanceTreshold, ManualResetEvent mre)
+        private string RunToPoint(Func<Waypoint> wp, bool targetCheck, bool aggroCheck, bool stopAtEnd, bool gathering, out Character target, int distanceTreshold, ManualResetEvent mre)
         {
             //Start and stop of running must be done outside of this method
             var outcome = "success";
@@ -71,7 +71,7 @@ namespace MagBot_FFXIV_v02
                 //Slowing down of loop is done in JumpIfStuck()
                 Face(wp(), distanceTreshold, mre);
 
-                if (!aggroCheck && !enemyCheck) mre.WaitOne(200); // Just to slow it down (aggroCheck and enemyCheck normally slows it down)
+                if (!aggroCheck && !targetCheck) mre.WaitOne(200); // Just to slow it down (aggroCheck and targetCheck normally slows it down)
 
                 if (mre.WaitOne(0))
                 {
@@ -92,12 +92,12 @@ namespace MagBot_FFXIV_v02
                         break;
                     }
                 }
-                if (enemyCheck)
+                if (targetCheck)
                 {
-                    target = EnemyCheck(mre);
+                    target = gathering ? NpcCheck(mre) : EnemyCheck(mre);
                     if (target != null)
                     {
-                        outcome = "enemy";
+                        outcome = "target";
                         break;
                     }
                 }
@@ -114,11 +114,11 @@ namespace MagBot_FFXIV_v02
             return outcome;
         }
 
-        public string RunToTarget(Character target, bool aggroCheck, int distanceTreshold, ManualResetEvent mre, out Character aggressor)
+        public string RunToTarget(Character target, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, out Character aggressor)
         {
             //The lambda represents a method that runs and returns target.WaypointLocation
-            Globals.Instance.GameLogger.Log("RunToPoint(): Target.");
-            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, out aggressor, distanceTreshold, mre);
+            Globals.Instance.GameLogger.Log("RunToTarget(): " + target.Name);
+            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, gathering, out aggressor, distanceTreshold, mre);
         }
 
         private void Face(Waypoint pt, double distanceTreshold, ManualResetEvent mre)
@@ -191,13 +191,13 @@ namespace MagBot_FFXIV_v02
             return "stuck";
         }
 
-        public string AttackTarget(Character target, ManualResetEvent mre, bool aggressor)
+        public string AttackTarget(Character target, ManualResetEvent mre)
         {
             Globals.Instance.GameLogger.Log("AttackTarget() initiated. Target: " + target.Name + ", Level: " + target.Level);
 
             var targetLevelOneAddress = Globals.Instance.MemoryBaseOffsetDictionary["Target1"];
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0); //Engage enemy
-            if (!aggressor) PreBattleAndPull(mre);
+            if (!HasAggressor()) PreBattleAndPull(mre);
 
             while (target.HP > 0)
             {
@@ -239,12 +239,14 @@ namespace MagBot_FFXIV_v02
                 if (mre.WaitOne(0))
                 {
                     Globals.Instance.GameLogger.Log("Gather() canceled.");
+                    Globals.Instance.KeySenderInstance.SendKey(Keys.Escape); //Need to escape out of the gathering menu before we can start running (in case of end-of-farming)
                     return "canceled";
                 }
 
                 if (HpLow(0.8))
                 {
                     Globals.Instance.GameLogger.Log("Escape in Gather().");
+                    Globals.Instance.KeySenderInstance.SendKey(Keys.Escape); //Need to escape out of the gathering menu before we can move
                     return "escape";
                 }
 
@@ -268,12 +270,12 @@ namespace MagBot_FFXIV_v02
                 }
             }
 
-            //To turn off Stealth
-            Task.Run(() =>
-            {
-                Task.Delay(2000);
-                UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
-            });
+            //Todo: This should check for stealth status and only take it off if we have it on. Until then, don't use it
+            //Task.Run(async () =>
+            //{
+            //    await Task.Delay(3000);
+            //    UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
+            //});
 
             return "success";
         }
@@ -290,7 +292,7 @@ namespace MagBot_FFXIV_v02
 
         private void PreGather(ManualResetEvent mre)
         {
-            UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
+            //UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
             mre.WaitOne(1000);
 
@@ -298,8 +300,8 @@ namespace MagBot_FFXIV_v02
             //It will always use only the lower GP cost spell, because we do not regenerate GP fast enough
             //So if we are leveling, choose FieldMaster. If we are farming for items, choose other ones (maybe randomize)
             //LeafTurn increases HQ, which increases XP earned though. So keep that in mind when leveling
-            UseSkill(Globals.Instance.SkillDictionary["FieldMastery"], mre, false, true);
-            //UseSkill(Globals.Instance.SkillDictionary["LeafTurn"], mre, false, true);
+            //UseSkill(Globals.Instance.SkillDictionary["FieldMastery"], mre, false, true);
+            UseSkill(Globals.Instance.SkillDictionary["LeafTurn"], mre, false, true);
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
             mre.WaitOne(Utils.getRandom(2600, 3000));
         }
@@ -390,7 +392,7 @@ namespace MagBot_FFXIV_v02
 
         private bool EnemyValid(Character target)
         {
-            var enemyOk = FarmingHandler.EnemyList.Length == 0 || FarmingHandler.EnemyList.Any(enemy => target.Name.Contains(enemy));
+            var enemyOk = FarmingHandler.TargetList.Length == 0 || FarmingHandler.TargetList.Any(enemy => target.Name.Contains(enemy));
             return enemyOk;
         }
 
@@ -411,6 +413,12 @@ namespace MagBot_FFXIV_v02
             var targetPointer = MemoryHandler.Instance.GetLvlOneAddressFromBaseOffset(targetBaseOffset);
             MemoryHandler.Instance.ReadInt(targetPointer, out lvlOneValue);
             return lvlOneValue > 0;
+        }
+
+        public static bool HasAggressor()
+        {
+            //This checks whether or not we are actually targeting something
+            return HasTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target2"]);
         }
 
         public void UseSkill(Skill skill, ManualResetEvent mre, bool ctrl = false, bool gp = false)

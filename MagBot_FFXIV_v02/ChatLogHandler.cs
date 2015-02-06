@@ -70,7 +70,7 @@ namespace MagBot_FFXIV_v02
                     if (newAddressOffset > _currentAddressOffset)
                     {
                         //Only update if new value is larger than existing
-                        if(newAddressOffset>1000000) Console.WriteLine(@"!!!HIGH LogLength(): " + newAddressOffset);
+                        //if(newAddressOffset>1000000) Console.WriteLine(@"!!!HIGH LogLength(): " + newAddressOffset);
                         _currentAddressOffset = newAddressOffset;
                     }
                 }
@@ -96,7 +96,6 @@ namespace MagBot_FFXIV_v02
                 string newLogText;
                 if (lengthOfLog < currentAddressOffset)
                 {
-                    Console.WriteLine(@"!!!WRAP!!!");
                     //It has wrapped since last time we polled
                     //We therefore first check if there is more to read at bottom
                     //If it is, we make sure the read the missing bytes
@@ -113,7 +112,6 @@ namespace MagBot_FFXIV_v02
                     }
                     //Update global variables
                     lock (_locker) { _currentAddressOffset = 0; }
-                    Console.WriteLine(@"ARE WE STUCK AT THE ABOVE LOCK (wrap1)?");
                     _totalBytesReadOnLastPoll = 0;
                     _newLogAddressAfterLastPoll = startOfLog;
                 }

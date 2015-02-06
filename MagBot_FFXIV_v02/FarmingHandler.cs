@@ -22,7 +22,7 @@ namespace MagBot_FFXIV_v02
 
         private int _totalXpEarned;
         private int _preBattleXp;
-        public static string[] EnemyList; //Bad paractice, but needed access to this list in EnemyCheck(), which in turn is called from both methods in this class and in Player
+        public static string[] TargetList; //Bad paractice, but needed access to this list in TargetCheck(), which in turn is called from both methods in this class and in Player
 
         public FarmingHandler(Player player)
         {
@@ -52,7 +52,7 @@ namespace MagBot_FFXIV_v02
                 if (target != null)
                 {
                     Globals.Instance.GameLogger.Log("Aggressive enemy found. Attacking it...");
-                    EngageHandler(target, escapeRoute, escapeRoute, false, FarmingMre, false, false);
+                    EngageHandler(target, escapeRoute, escapeRoute, false, false, FarmingMre, false, false);
                     continue;
                 }
                 FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and EnemyCheck
@@ -61,7 +61,7 @@ namespace MagBot_FFXIV_v02
                 {
                     if (_player.WaypointLocation.Distance(target.WaypointLocation) > MaxPullingDistance) continue;
                     Globals.Instance.GameLogger.Log("Non-aggressive enemy found. Attacking it...");
-                    EngageHandler(target, escapeRoute, escapeRoute, true, FarmingMre, false, false);
+                    EngageHandler(target, escapeRoute, escapeRoute, true, false, FarmingMre, false, false);
                     continue;
                 }
                 Globals.Instance.GameLogger.Log("StandStillExpFarming() found no enemies, proceeding to check again...");
@@ -72,96 +72,79 @@ namespace MagBot_FFXIV_v02
         public void StartExpFarming(Route route, Route escapeRoute, string[] enemyList)
         {
             FarmingMre.Reset();
-            EnemyList = enemyList;
+            TargetList = enemyList;
             Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Exp Farming =====!!!!=====");
             while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) FarmingMre.WaitOne(1000); //Heal up before start
 
-            Globals.Instance.GameLogger.Log("Running to first waypoint...");
+            //Globals.Instance.GameLogger.Log("Running to first waypoint...");
             //var closestWaypointIndex = route.Points.IndexOf(route.ClosestWaypoint(_player.WaypointLocation));
-            //RunningHandler(route, escapeRoute, false, true, PointTurnDistance, FarmingMre, closestWaypointIndex, true); //Don't start farming until at path, so run to closest point before starting
-            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, FarmingMre);
+            //RunningHandler(route, escapeRoute, false, true, PointTurnDistance, false, FarmingMre, closestWaypointIndex, true); //Don't start farming until at path, so run to closest point before starting
+            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, false, FarmingMre);
 
-            //RunningHandler(route, escapeRoute, false, false, PointTurnDistance, FarmingMre); //If we just want to test running and not attacking, comment the above and uncomment this
+            //RunningHandler(route, escapeRoute, false, false, PointTurnDistance, false, FarmingMre); //If we just want to test running and not attacking, comment the above and uncomment this
         }
 
         public void StartGathering(Route route, Route escapeRoute)
         {
-            Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
             FarmingMre.Reset();
-            _runningMre.Reset();
-            var locker = new object();
-            var gatheringAre = new AutoResetEvent(false);
-            var searchThread = new Thread(s => SearchAndGather(FarmingMre, gatheringAre, _runningMre, locker, route, escapeRoute, true));
-            EnemyList = new[] { "Tree", "Vegetation" };
-
+            TargetList = new[] { "Tree", "Vegetation" };
+            Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
             while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) FarmingMre.WaitOne(1000); //Heal up before start
 
-            searchThread.Start();
+            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, true, FarmingMre);
+            
+            
+            //Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
+            //FarmingMre.Reset();
+            //_runningMre.Reset();
+            //var locker = new object();
+            //var gatheringAre = new AutoResetEvent(false);
+            //var searchThread = new Thread(s => SearchAndGather(FarmingMre, gatheringAre, _runningMre, locker, route, escapeRoute, true));
+            //TargetList = new[] { "Tree", "Vegetation" };
 
-            while (!FarmingMre.WaitOne(0))
-            {
-                lock (locker)
-                {
-                    gatheringAre.Set();
-                    RunningHandler(route, escapeRoute, false, false, PointTurnDistance, _runningMre);
-                    _runningMre.Reset();
-                }
-                gatheringAre.WaitOne(); //Ensures S&G gets lock first
-            }
-            Globals.Instance.GameLogger.Log("StartGathering() complete.");
+            //while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) FarmingMre.WaitOne(1000); //Heal up before start
+
+            //searchThread.Start();
+
+            //while (!FarmingMre.WaitOne(0))
+            //{
+            //    lock (locker)
+            //    {
+            //        gatheringAre.Set();
+            //        RunningHandler(route, escapeRoute, false, false, PointTurnDistance, _runningMre);
+            //        _runningMre.Reset();
+            //    }
+            //    gatheringAre.WaitOne(); //Ensures S&G gets lock first
+            //}
+            //Globals.Instance.GameLogger.Log("StartGathering() complete.");
         }
 
-        private void SearchAndGather(ManualResetEvent mre, AutoResetEvent are, ManualResetEvent runningMre, object locker, Route route, Route escapeRoute, bool aggroCheck)
-        {
-            while (!mre.WaitOne(0))
-            {
-                Character target = null;
-                are.WaitOne(); //Ensures running starts first
-                while (!mre.WaitOne(0))
-                {
-                    mre.WaitOne(Utils.getRandom(300, 500));
-                    target = _player.NpcCheck(mre);
-                    if (target != null) break;
-                }
+        //private void SearchAndGather(ManualResetEvent mre, AutoResetEvent are, ManualResetEvent runningMre, object locker, Route route, Route escapeRoute, bool aggroCheck)
+        //{
+        //    while (!mre.WaitOne(0))
+        //    {
+        //        Character target = null;
+        //        are.WaitOne(); //Ensures running starts first
+        //        while (!mre.WaitOne(0))
+        //        {
+        //            mre.WaitOne(Utils.getRandom(300, 500));
+        //            target = _player.NpcCheck(mre);
+        //            if (target != null) break;
+        //        }
 
-                runningMre.Set(); //Ensures Running is halted
-                lock (locker)
-                {
-                    are.Set(); //Allows running thread to move to wait position at its lock
-                    if (mre.WaitOne(0)) return;
+        //        runningMre.Set(); //Ensures Running is halted
+        //        lock (locker)
+        //        {
+        //            are.Set(); //Allows running thread to move to wait position at its lock
+        //            if (mre.WaitOne(0)) return; //Avoids deadlock by releasing lock and thereby letting running-thread through
 
-                    //Run to point
-                    Character aggressor;
-                    var outcome = _player.RunToTarget(target, aggroCheck, GatherDistance, mre, out aggressor);
-                    if (outcome == "dead")
-                    {
-                        StopApp();
-                        break;
-                    }
-                    if (outcome == "canceled")
-                    {
-                        break;
-                    }
-                    if (outcome == "stuck") //Don't move away if we are running to aggro and get stuck (aggroCheck is false).
-                    {
-                        mre.WaitOne(500);
-                        Globals.Instance.KeySenderInstance.SendDown(Keys.W);
-                        Player.Turn180(mre);
-                        Globals.Instance.KeySenderInstance.SendUp(Keys.W);
-                    }
-                    if (aggroCheck && outcome == "aggro" && aggressor != null)
-                    {
-                        InitiateEscape(escapeRoute, true, mre);
-                        continue;
-                    }
+        //            EngageHandler(target, route, escapeRoute, true, mre, false, true, true);
+        //        }
+        //    }
+        //    Globals.Instance.GameLogger.Log("SearchAndGather() complete.");
+        //}
 
-                    EngageHandler(target, route, escapeRoute, true, mre, false, true, true);
-                }
-            }
-            Globals.Instance.GameLogger.Log("SearchAndGather() complete.");
-        }
-
-        private void RunningHandler(Route route, Route escapeRoute, bool enemyCheck, bool aggroCheck, int distanceTreshold, ManualResetEvent mre, int goalWp = -1, bool oppositeWay = false)
+        private void RunningHandler(Route route, Route escapeRoute, bool targetCheck, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, int goalWp = -1, bool oppositeWay = false)
         {
             Globals.Instance.GameLogger.Log("RunningHandler() initiated...");
             var onlyAggro = goalWp > -1;
@@ -169,7 +152,7 @@ namespace MagBot_FFXIV_v02
             {
                 Character target;
                 mre.WaitOne(500); //Wait before we start running route again
-                var outcome = _player.RunRouteToPoint(route, enemyCheck, aggroCheck, distanceTreshold, mre, out target, goalWp, oppositeWay);
+                var outcome = _player.RunRouteToPoint(route, targetCheck, aggroCheck, distanceTreshold, gathering, mre, out target, goalWp, oppositeWay);
                 if (outcome.Contains("dead"))
                 {
                     StopApp();
@@ -181,12 +164,13 @@ namespace MagBot_FFXIV_v02
                 }
                 if (aggroCheck && outcome.Contains("aggro") && target != null)
                 {
-                    EngageHandler(target, route, escapeRoute, false, mre, onlyAggro);
+                    if(gathering) InitiateEscape(escapeRoute, true, mre); //So it will never pursue aggressors
+                    else EngageHandler(target, route, escapeRoute, false, false, mre, onlyAggro);
                     continue;
                 }
-                if (enemyCheck && outcome.Contains("enemy") && target != null)
+                if (targetCheck && outcome.Contains("target") && target != null)
                 {
-                    EngageHandler(target, route, escapeRoute, true, mre, onlyAggro);
+                    EngageHandler(target, route, escapeRoute, true, gathering, mre, onlyAggro);
                     continue;
                 }
                 if (goalWp > -1) break;
@@ -194,27 +178,28 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.GameLogger.Log("RunningHandler() complete.");
         }
 
-        private void EngageHandler(Character target, Route route, Route escapeRoute, bool aggroCheck, ManualResetEvent mre, bool onlyAggro = false, bool runToTarget = true, bool gathering = false)
+        private void EngageHandler(Character target, Route route, Route escapeRoute, bool aggroCheck, bool gathering, ManualResetEvent mre, bool onlyAggro = false, bool runToTarget = true)
         {
-            Globals.Instance.GameLogger.Log("EngageHandler() initiated. RunToPoint() aggroCheck: " + aggroCheck);
             if (runToTarget) Globals.Instance.KeySenderInstance.SendUp(Keys.W);
 
             while (!mre.WaitOne(0))
             {
-                if (!aggroCheck && (target.MaxHP > _player.MaxHP + 2000)) //Level property does not work anymore
+                Globals.Instance.GameLogger.Log("EngageHandler() initiated. aggroCheck: " + aggroCheck + ". Target: " + target.Name);
+
+                if (Player.HasAggressor() && (target.MaxHP > _player.MaxHP + 2000)) //Level property does not work anymore
                 {
                     Globals.Instance.GameLogger.Log("Aggro from too high-lvl enemy. Escaping...");
                     InitiateEscape(escapeRoute, true, mre);
                     break;
                 }
 
+                Character aggressor;
                 if (runToTarget)
                 {
-                    mre.WaitOne(300); //Pause before running to next enemy
-                    Character aggressor;
+                    mre.WaitOne(300); //Pause before running to next target
                     var distanceTreshold = gathering ? GatherDistance : FightingDistance;
-                    var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, mre, out aggressor);
-                    //If dead: StopApp(). If aggro: change target. If canceled/stuck: break. Else (successful), proceed with attacking enemy and subsequently searching for next
+                    var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, gathering, mre, out aggressor);
+                    //If dead: StopApp(). If aggro: change target. If canceled/stuck: break. Else (successful), proceed with engaging target and subsequently searching for next
                     if (outcome == "dead")
                     {
                         StopApp();
@@ -224,20 +209,27 @@ namespace MagBot_FFXIV_v02
                     {
                         break;
                     }
-                    if (aggroCheck && outcome == "stuck") //Don't move away if we are running to aggro and get stuck (aggroCheck is false).
+                    if (!Player.HasAggressor() && outcome == "stuck") //Don't move away if we are running to aggro and get stuck (aggroCheck is false).
                     {
+                        //Hitting esc here would make no difference, because when we hit it again below, it will select a new nearest target anyways
+                        //Just like it would if we had hit esc then retarget
                         Player.Turn180(mre);
-                        goto TargetCheck; //Look for another enemy
+                        RunningHandler(route, escapeRoute, false, true, PointTurnDistance, gathering, mre); //Run to closest point on route
+                        goto TargetCheck; //Look for another target
                     }
-                    if (aggroCheck && outcome == "aggro" && aggressor != null)
+                    if (outcome == "aggro" && aggressor != null) //It won't check for aggro if we are running to an aggressor, and outcome can never be "aggro"
                     {
-                        if (gathering) InitiateEscape(escapeRoute, true, mre);
-                        else
+                        if (gathering)
                         {
-                            target = aggressor;
-                            aggroCheck = false;
-                            continue;
+                            InitiateEscape(escapeRoute, true, mre);
+                            break; //Start running again
                         }
+
+                        //Battle response:
+                        Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
+                        target = aggressor;
+                        aggroCheck = false;
+                        continue;
                     }
                 }
 
@@ -248,8 +240,8 @@ namespace MagBot_FFXIV_v02
                     goto TargetCheck;
                 }
 
-                mre.WaitOne(300); //Pause before attacking enemy
-                var engageOutcome = gathering ? _player.Gather(mre) : _player.AttackTarget(target, mre, !aggroCheck); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next enemy. 
+                mre.WaitOne(300); //Pause before engaging target
+                var engageOutcome = gathering ? _player.Gather(mre) : _player.AttackTarget(target, mre); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next target. 
                 if (engageOutcome == "dead")
                 {
                     StopApp();
@@ -262,7 +254,7 @@ namespace MagBot_FFXIV_v02
                 if (engageOutcome == "escape")
                 {
                     InitiateEscape(escapeRoute, true, mre);
-                    //Continue to immediately check for aggro and enemy
+                    //Continue to immediately check for aggro and target
                 }
                 if (engageOutcome == "too far")
                 {
@@ -275,33 +267,35 @@ namespace MagBot_FFXIV_v02
 
             TargetCheck:
                 //When enemy is dead, always proceed to check for aggressor and then enemy (or target if gathering)
-                target = _player.AggroCheck(mre);
-                if (target != null)
+                aggressor = _player.AggroCheck(mre);
+                if (aggressor != null)
                 {
-                    if (gathering) InitiateEscape(escapeRoute, true, mre);
-                    else
+                    if (gathering)
                     {
-                        Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
-                        aggroCheck = false;
-                        continue;
+                        InitiateEscape(escapeRoute, true, mre);
+                        break; //Start running again
                     }
+
+                    //Battle response:
+                    Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
+                    target = aggressor;
+                    aggroCheck = false;
+                    continue;
                 }
 
                 if (!onlyAggro)
                 {
-                    //If no aggro, and too far from path, return to first point, then look for aggro and enemy (or target if gathering)
+                    //If no aggro, and too far from path, return to first point, then look for aggro and target
                     var closestWp = route.ClosestWaypoint(_player.WaypointLocation);
-                    if (runToTarget && (_player.WaypointLocation.Distance(closestWp) > MaxDistanceFromPath) &&
-                        !mre.WaitOne(0))
+                    if (runToTarget && (_player.WaypointLocation.Distance(closestWp) > MaxDistanceFromPath) && !mre.WaitOne(0))
                     {
                         Globals.Instance.GameLogger.Log("Now too far from path, returning to closest waypoint.");
-                        RunningHandler(route, escapeRoute, false, false, PointTurnDistance, mre,
-                            route.Points.IndexOf(closestWp));
+                        RunningHandler(route, escapeRoute, false, false, PointTurnDistance, gathering, mre, route.Points.IndexOf(closestWp));
                         goto TargetCheck;
                     }
 
                     //Search for target
-                    FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and EnemyCheck
+                    FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and TargetCheck
                     target = gathering ? _player.NpcCheck(mre) : _player.EnemyCheck(mre);
                     if (target != null)
                     {
@@ -322,12 +316,12 @@ namespace MagBot_FFXIV_v02
         {
             //Traverses from closest waypoint, up to highest, then return from closest down to point 0
             Globals.Instance.GameLogger.Log("Escape initiated, restart: " + restart);
-            RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, mre, escapeRoute.Points.Count - 1);
+            RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, false, mre, escapeRoute.Points.Count - 1);
             if (restart)
             {
-                while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9))
-                    mre.WaitOne(3000); //Wait before we continue running
-                RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, mre, 0, true);
+                while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) mre.WaitOne(3000); //Wait before we continue running
+                mre.WaitOne(5000); //Wait a bit longer (for gatherer we might have full HP / MP)
+                RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, false, mre, 0, true);
             }
         }
 
