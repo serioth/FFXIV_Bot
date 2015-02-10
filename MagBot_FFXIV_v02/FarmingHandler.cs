@@ -1,5 +1,4 @@
-﻿using System;
-using System.Globalization;
+﻿using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -23,6 +22,12 @@ namespace MagBot_FFXIV_v02
         private int _totalXpEarned;
         private int _preBattleXp;
         public static string[] TargetList; //Bad paractice, but needed access to this list in TargetCheck(), which in turn is called from both methods in this class and in Player
+
+        public enum FarmingType
+        {
+            Battle,
+            Field
+        }
 
         public FarmingHandler(Player player)
         {
@@ -52,7 +57,7 @@ namespace MagBot_FFXIV_v02
                 if (target != null)
                 {
                     Globals.Instance.GameLogger.Log("Aggressive enemy found. Attacking it...");
-                    EngageHandler(target, escapeRoute, escapeRoute, false, false, FarmingMre, false, false);
+                    EngageHandler(target, escapeRoute, escapeRoute, false, FarmingType.Battle, FarmingMre, false, false);
                     continue;
                 }
                 FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and EnemyCheck
@@ -61,7 +66,7 @@ namespace MagBot_FFXIV_v02
                 {
                     if (_player.WaypointLocation.Distance(target.WaypointLocation) > MaxPullingDistance) continue;
                     Globals.Instance.GameLogger.Log("Non-aggressive enemy found. Attacking it...");
-                    EngageHandler(target, escapeRoute, escapeRoute, true, false, FarmingMre, false, false);
+                    EngageHandler(target, escapeRoute, escapeRoute, true, FarmingType.Battle, FarmingMre, false, false);
                     continue;
                 }
                 Globals.Instance.GameLogger.Log("StandStillExpFarming() found no enemies, proceeding to check again...");
@@ -79,7 +84,7 @@ namespace MagBot_FFXIV_v02
             //Globals.Instance.GameLogger.Log("Running to first waypoint...");
             //var closestWaypointIndex = route.Points.IndexOf(route.ClosestWaypoint(_player.WaypointLocation));
             //RunningHandler(route, escapeRoute, false, true, PointTurnDistance, false, FarmingMre, closestWaypointIndex, true); //Don't start farming until at path, so run to closest point before starting
-            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, false, FarmingMre);
+            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, FarmingType.Battle, FarmingMre);
 
             //RunningHandler(route, escapeRoute, false, false, PointTurnDistance, false, FarmingMre); //If we just want to test running and not attacking, comment the above and uncomment this
         }
@@ -91,7 +96,7 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
             while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) FarmingMre.WaitOne(1000); //Heal up before start
 
-            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, true, FarmingMre);
+            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, FarmingType.Field, FarmingMre);
             
             
             //Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
@@ -144,7 +149,7 @@ namespace MagBot_FFXIV_v02
         //    Globals.Instance.GameLogger.Log("SearchAndGather() complete.");
         //}
 
-        private void RunningHandler(Route route, Route escapeRoute, bool targetCheck, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, int goalWp = -1, bool oppositeWay = false)
+        private void RunningHandler(Route route, Route escapeRoute, bool targetCheck, bool aggroCheck, int distanceTreshold, FarmingType farmingType, ManualResetEvent mre, int goalWp = -1, bool oppositeWay = false)
         {
             Globals.Instance.GameLogger.Log("RunningHandler() initiated...");
             var onlyAggro = goalWp > -1;
@@ -152,7 +157,7 @@ namespace MagBot_FFXIV_v02
             {
                 Character target;
                 mre.WaitOne(500); //Wait before we start running route again
-                var outcome = _player.RunRouteToPoint(route, targetCheck, aggroCheck, distanceTreshold, gathering, mre, out target, goalWp, oppositeWay);
+                var outcome = _player.RunRouteToPoint(route, targetCheck, aggroCheck, distanceTreshold, farmingType, mre, out target, goalWp, oppositeWay);
                 if (outcome.Contains("dead"))
                 {
                     StopApp();
@@ -164,13 +169,13 @@ namespace MagBot_FFXIV_v02
                 }
                 if (aggroCheck && outcome.Contains("aggro") && target != null)
                 {
-                    if(gathering) InitiateEscape(escapeRoute, true, mre); //So it will never pursue aggressors
-                    else EngageHandler(target, route, escapeRoute, false, false, mre, onlyAggro);
+                    if (farmingType == FarmingType.Field) InitiateEscape(escapeRoute, true, mre); //So it will never pursue aggressors
+                    else EngageHandler(target, route, escapeRoute, false, FarmingType.Battle, mre, onlyAggro);
                     continue;
                 }
                 if (targetCheck && outcome.Contains("target") && target != null)
                 {
-                    EngageHandler(target, route, escapeRoute, true, gathering, mre, onlyAggro);
+                    EngageHandler(target, route, escapeRoute, true, farmingType, mre, onlyAggro);
                     continue;
                 }
                 if (goalWp > -1) break;
@@ -178,7 +183,7 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.GameLogger.Log("RunningHandler() complete.");
         }
 
-        private void EngageHandler(Character target, Route route, Route escapeRoute, bool aggroCheck, bool gathering, ManualResetEvent mre, bool onlyAggro = false, bool runToTarget = true)
+        private void EngageHandler(Character target, Route route, Route escapeRoute, bool aggroCheck, FarmingType farmingType, ManualResetEvent mre, bool onlyAggro = false, bool runToTarget = true)
         {
             if (runToTarget) Globals.Instance.KeySenderInstance.SendUp(Keys.W);
 
@@ -197,8 +202,8 @@ namespace MagBot_FFXIV_v02
                 if (runToTarget)
                 {
                     mre.WaitOne(300); //Pause before running to next target
-                    var distanceTreshold = gathering ? GatherDistance : FightingDistance;
-                    var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, gathering, mre, out aggressor);
+                    var distanceTreshold = farmingType == FarmingType.Field ? GatherDistance : FightingDistance;
+                    var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, farmingType, mre, out aggressor);
                     //If dead: StopApp(). If aggro: change target. If canceled/stuck: break. Else (successful), proceed with engaging target and subsequently searching for next
                     if (outcome == "dead")
                     {
@@ -214,22 +219,24 @@ namespace MagBot_FFXIV_v02
                         //Hitting esc here would make no difference, because when we hit it again below, it will select a new nearest target anyways
                         //Just like it would if we had hit esc then retarget
                         Player.Turn180(mre);
-                        RunningHandler(route, escapeRoute, false, true, PointTurnDistance, gathering, mre); //Run to closest point on route
+                        //RunningHandler(route, escapeRoute, false, true, PointTurnDistance, gathering, mre, route.Points.IndexOf(route.ClosestWaypoint(target.WaypointLocation))); //Run to closest point on route
                         goto TargetCheck; //Look for another target
                     }
                     if (outcome == "aggro" && aggressor != null) //It won't check for aggro if we are running to an aggressor, and outcome can never be "aggro"
                     {
-                        if (gathering)
+                        if (farmingType == FarmingType.Field)
                         {
                             InitiateEscape(escapeRoute, true, mre);
                             break; //Start running again
                         }
 
-                        //Battle response:
-                        Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
-                        target = aggressor;
-                        aggroCheck = false;
-                        continue;
+                        if (farmingType == FarmingType.Battle)
+                        {
+                            Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
+                            target = aggressor;
+                            aggroCheck = false;
+                            continue;
+                        }
                     }
                 }
 
@@ -241,7 +248,7 @@ namespace MagBot_FFXIV_v02
                 }
 
                 mre.WaitOne(300); //Pause before engaging target
-                var engageOutcome = gathering ? _player.Gather(mre) : _player.AttackTarget(target, mre); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next target. 
+                var engageOutcome = farmingType == FarmingType.Field ? _player.Gather(mre) : _player.AttackTarget(target, mre); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next target. 
                 if (engageOutcome == "dead")
                 {
                     StopApp();
@@ -270,7 +277,7 @@ namespace MagBot_FFXIV_v02
                 aggressor = _player.AggroCheck(mre);
                 if (aggressor != null)
                 {
-                    if (gathering)
+                    if (farmingType == FarmingType.Field)
                     {
                         InitiateEscape(escapeRoute, true, mre);
                         break; //Start running again
@@ -290,13 +297,13 @@ namespace MagBot_FFXIV_v02
                     if (runToTarget && (_player.WaypointLocation.Distance(closestWp) > MaxDistanceFromPath) && !mre.WaitOne(0))
                     {
                         Globals.Instance.GameLogger.Log("Now too far from path, returning to closest waypoint.");
-                        RunningHandler(route, escapeRoute, false, false, PointTurnDistance, gathering, mre, route.Points.IndexOf(closestWp));
+                        RunningHandler(route, escapeRoute, false, false, PointTurnDistance, farmingType, mre, route.Points.IndexOf(closestWp));
                         goto TargetCheck;
                     }
 
                     //Search for target
                     FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and TargetCheck
-                    target = gathering ? _player.NpcCheck(mre) : _player.EnemyCheck(mre);
+                    target = farmingType == FarmingType.Field ? _player.NpcCheck(mre) : _player.EnemyCheck(mre);
                     if (target != null)
                     {
                         Globals.Instance.GameLogger.Log("Non-aggressive target found. Pursuing it...");
@@ -316,12 +323,12 @@ namespace MagBot_FFXIV_v02
         {
             //Traverses from closest waypoint, up to highest, then return from closest down to point 0
             Globals.Instance.GameLogger.Log("Escape initiated, restart: " + restart);
-            RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, false, mre, escapeRoute.Points.Count - 1);
+            RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, FarmingType.Battle, mre, escapeRoute.Points.Count - 1);
             if (restart)
             {
                 while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) mre.WaitOne(3000); //Wait before we continue running
                 mre.WaitOne(5000); //Wait a bit longer (for gatherer we might have full HP / MP)
-                RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, false, mre, 0, true);
+                RunningHandler(escapeRoute, escapeRoute, false, false, PointTurnDistance, FarmingType.Battle, mre, 0, true);
             }
         }
 
@@ -335,7 +342,7 @@ namespace MagBot_FFXIV_v02
                 var uiSynch = MainForm.Get.UISynchContext;
                 if (xpReceived > 0)
                 {
-                    Console.WriteLine(@"XP Received: " + xpReceived);
+                    Globals.Instance.GameLogger.Log("XP Received: " + xpReceived);
                     var maxExp = int.Parse(MainForm.Get.GetText("lbMaxExp"));
                     var minExp = int.Parse(MainForm.Get.GetText("lbMinExp"));
                     if (xpReceived > maxExp) uiSynch.Send(o => MainForm.Get.UpdateText("lbMaxExp", xpReceived.ToString(CultureInfo.InvariantCulture)), null);
@@ -347,6 +354,36 @@ namespace MagBot_FFXIV_v02
                     _preBattleXp = postBattleXp; //Just to update the pre-battle number
                 }
             });
+        }
+
+        //TODO: This is not a good way to do it. We should either have a macro or have some way to read from memory what menue option we are on
+        //TODO: Switch out with self-repair once available
+        private void RepairGear(Route route, ManualResetEvent mre)
+        {
+            const string npcName = "";
+            RunningHandler(route, route, false, false, PointTurnDistance, FarmingType.Battle, mre, route.Points.Count - 1); //Run to repairer
+            mre.WaitOne(1000);
+            var npc = _player.NpcCheck(mre);
+            if (npc != null && npc.Name.Contains(npcName))
+            {
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+                mre.WaitOne(2000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8);
+                mre.WaitOne(1000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8);
+                mre.WaitOne(1000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8);
+                mre.WaitOne(1000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad8);
+                mre.WaitOne(1000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+                mre.WaitOne(2000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+                mre.WaitOne(2000);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+            }
+            mre.WaitOne(2000);
+            RunningHandler(route, route, false, false, PointTurnDistance, FarmingType.Battle, mre, 0, true); //Run back again
         }
 
         public void StopApp()

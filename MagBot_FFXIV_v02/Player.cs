@@ -17,7 +17,7 @@ namespace MagBot_FFXIV_v02
         private PetInfo PetInfo { get; set; }
 
         //OUTCOMES: canceled (break), dead (StopApp()), aggro (as appropriate), success (only if we define an end goal)
-        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
+        public string RunRouteToPoint(Route route, bool enemycheck, bool aggroCheck, int distanceTreshold, FarmingHandler.FarmingType farmingType, ManualResetEvent mre, out Character target, int goalWp = -1, bool oppositeWay = false)
         {
             //Start and stop of running must be done outside of this method
             string outcome = null;
@@ -27,7 +27,7 @@ namespace MagBot_FFXIV_v02
             while (!mre.WaitOne(0))
             {
                 Globals.Instance.GameLogger.Log("RunToPoint(): " + route.Name  +". Point " + route.Points.IndexOf(wp));
-                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, gathering, out target, distanceTreshold, mre); //This lambda represents a method that just returns wp
+                outcome = RunToPoint(() => wp, enemycheck, aggroCheck, false, farmingType, out target, distanceTreshold, mre); //This lambda represents a method that just returns wp
                 if (outcome == "canceled" || outcome == "dead" || outcome == "target" || outcome == "aggro") break;
                 if (outcome == "success") if (goalWp > -1 && wp == route.Points[goalWp]) break;
                 if (outcome == "stuck") //This will go forever, if it cannot get unstuck. It runs to same wp. Should we perhaps pick a new point?
@@ -239,6 +239,8 @@ namespace MagBot_FFXIV_v02
                 if (mre.WaitOne(0))
                 {
                     Globals.Instance.GameLogger.Log("Gather() canceled.");
+                    //TODO: Add a check to see if widget is up
+                    Thread.Sleep(4000); //If we stop while in here, we actually HAVE to wait until the current gathering attempt is done
                     Globals.Instance.KeySenderInstance.SendKey(Keys.Escape); //Need to escape out of the gathering menu before we can start running (in case of end-of-farming)
                     return "canceled";
                 }
@@ -246,6 +248,7 @@ namespace MagBot_FFXIV_v02
                 if (HpLow(0.8))
                 {
                     Globals.Instance.GameLogger.Log("Escape in Gather().");
+                    Thread.Sleep(4000); //Todo: Same as above
                     Globals.Instance.KeySenderInstance.SendKey(Keys.Escape); //Need to escape out of the gathering menu before we can move
                     return "escape";
                 }
@@ -257,7 +260,7 @@ namespace MagBot_FFXIV_v02
                 }
 
                 //Engage
-                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
+                Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0); //If we do not have a npc selected, this selects closest enemy or npc
                 mre.WaitOne(Utils.getRandom(2600, 3000));
                 count++;
 
@@ -267,15 +270,18 @@ namespace MagBot_FFXIV_v02
                     Globals.Instance.GameLogger.Log("Could not reach target, attempting to reposition.");
                     Reposition(mre);
                     PreGather(mre);
+                    count = 0;
                 }
             }
 
             //Todo: This should check for stealth status and only take it off if we have it on. Until then, don't use it
-            //Task.Run(async () =>
-            //{
-            //    await Task.Delay(3000);
-            //    UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
-            //});
+            Task.Run(async () =>
+            {
+                await Task.Delay(2000);
+                //UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
+                UseSkill(Globals.Instance.SkillDictionary["Run"], mre);
+            });
+
 
             return "success";
         }
@@ -292,9 +298,10 @@ namespace MagBot_FFXIV_v02
 
         private void PreGather(ManualResetEvent mre)
         {
+            UseSkill(Globals.Instance.SkillDictionary["XpFood"], mre, true); //TODO: Instead check if it is on, and cast if not
             //UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
-            mre.WaitOne(1000);
+            mre.WaitOne(1500);
 
             //SPELLS
             //It will always use only the lower GP cost spell, because we do not regenerate GP fast enough
@@ -450,6 +457,7 @@ namespace MagBot_FFXIV_v02
 
         private void PreBattleAndPull(ManualResetEvent mre)
         {
+            UseSkill(Globals.Instance.SkillDictionary["XpFood"], mre, true); //TODO: Instead check if it is on, and cast if not
             if (PetInfo.PetHP < 250) UseSkill(Globals.Instance.SkillDictionary["SummonII"], mre);
             UseSkill(Globals.Instance.SkillDictionary["Curl"], mre, true); //Curl for 20sec
             mre.WaitOne(Utils.getRandom(100, 200));
@@ -529,7 +537,7 @@ namespace MagBot_FFXIV_v02
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
             mre.WaitOne(300);
             Globals.Instance.KeySenderInstance.SendDown(Keys.W);
-            mre.WaitOne(2000);
+            mre.WaitOne(5000);
             Globals.Instance.KeySenderInstance.SendUp(Keys.W);
             mre.WaitOne(300);
             Globals.Instance.KeySenderInstance.SendDown(Keys.A);
