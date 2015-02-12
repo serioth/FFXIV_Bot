@@ -99,7 +99,7 @@ namespace MagBot_FFXIV_v02
                     TargetList = new[] {"Tree", "Vegetation"};
                     break;
                 case(FarmingType.Mining):
-                    TargetList = new[] {"Mineral"};
+                    TargetList = new[] {"Mineral", "Rocky"};
                     break;
             }
 
