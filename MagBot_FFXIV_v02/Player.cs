@@ -113,7 +113,7 @@ namespace MagBot_FFXIV_v02
             sw.Stop();
             if (stopAtEnd &&  outcome != "stuck") Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             Globals.Instance.GameLogger.Log("RunToPoint() completed. Outcome: " + outcome);
-            return outcome;
+            return outcome;  
         }
 
         public string RunToLockedTarget(Character target, bool aggroCheck, out Character aggressor, int distanceTreshold, ManualResetEvent mre)
