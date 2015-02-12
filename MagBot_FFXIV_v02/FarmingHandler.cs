@@ -17,7 +17,7 @@ namespace MagBot_FFXIV_v02
         public const int MaxEnemyLevelDiff = 4;
         private const int FightingDistance = 15;
         private const int PointTurnDistance = 4;
-        private const int GatherDistance = 2;
+        private const int GatherDistance = 3;
 
         private int _totalXpEarned;
         private int _preBattleXp;
@@ -26,7 +26,8 @@ namespace MagBot_FFXIV_v02
         public enum FarmingType
         {
             Battle,
-            Field
+            Botany,
+            Mining
         }
 
         public FarmingHandler(Player player)
@@ -89,14 +90,23 @@ namespace MagBot_FFXIV_v02
             //RunningHandler(route, escapeRoute, false, false, PointTurnDistance, false, FarmingMre); //If we just want to test running and not attacking, comment the above and uncomment this
         }
 
-        public void StartGathering(Route route, Route escapeRoute)
+        public void StartGathering(Route route, Route escapeRoute, FarmingType farmingType)
         {
             FarmingMre.Reset();
-            TargetList = new[] { "Tree", "Vegetation" };
+            switch (farmingType)
+            {
+                case(FarmingType.Botany):
+                    TargetList = new[] {"Tree", "Vegetation"};
+                    break;
+                case(FarmingType.Mining):
+                    TargetList = new[] {"Mineral"};
+                    break;
+            }
+
             Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
             while ((_player.HP < _player.MaxHP * 0.9 || _player.MP < _player.MaxMP * 0.9)) FarmingMre.WaitOne(1000); //Heal up before start
 
-            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, FarmingType.Field, FarmingMre);
+            RunningHandler(route, escapeRoute, true, true, PointTurnDistance, farmingType, FarmingMre);
             
             
             //Globals.Instance.GameLogger.Log("=====!!!!===== Initiating Gathering =====!!!!=====");
@@ -153,6 +163,8 @@ namespace MagBot_FFXIV_v02
         {
             Globals.Instance.GameLogger.Log("RunningHandler() initiated...");
             var onlyAggro = goalWp > -1;
+            var fieldFarming = farmingType == FarmingType.Botany || farmingType == FarmingType.Mining;
+
             while (!mre.WaitOne(0))
             {
                 Character target;
@@ -169,7 +181,7 @@ namespace MagBot_FFXIV_v02
                 }
                 if (aggroCheck && outcome.Contains("aggro") && target != null)
                 {
-                    if (farmingType == FarmingType.Field) InitiateEscape(escapeRoute, true, mre); //So it will never pursue aggressors
+                    if (fieldFarming) InitiateEscape(escapeRoute, true, mre); //So it will never pursue aggressors
                     else EngageHandler(target, route, escapeRoute, false, FarmingType.Battle, mre, onlyAggro);
                     continue;
                 }
@@ -185,7 +197,8 @@ namespace MagBot_FFXIV_v02
 
         private void EngageHandler(Character target, Route route, Route escapeRoute, bool aggroCheck, FarmingType farmingType, ManualResetEvent mre, bool onlyAggro = false, bool runToTarget = true)
         {
-            if (runToTarget) Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            var fieldFarming = farmingType == FarmingType.Botany || farmingType == FarmingType.Mining;
+            //if (runToTarget) Globals.Instance.KeySenderInstance.SendKey(Keys.R);  //Else we press W again when we start running to target, when in fact it was already pressed
 
             while (!mre.WaitOne(0))
             {
@@ -202,9 +215,9 @@ namespace MagBot_FFXIV_v02
                 if (runToTarget)
                 {
                     mre.WaitOne(300); //Pause before running to next target
-                    var distanceTreshold = farmingType == FarmingType.Field ? GatherDistance : FightingDistance;
-                    var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, farmingType, mre, out aggressor);
-                    //If dead: StopApp(). If aggro: change target. If canceled/stuck: break. Else (successful), proceed with engaging target and subsequently searching for next
+                    var distanceTreshold = fieldFarming ? GatherDistance : FightingDistance;
+                    //var outcome = _player.RunToTarget(target, aggroCheck, distanceTreshold, farmingType, mre, out aggressor); //This is the normal run without lock
+                    var outcome = fieldFarming ? _player.RunToLockedTarget(target, aggroCheck, out aggressor, distanceTreshold, mre) : _player.RunToTarget(target, aggroCheck, distanceTreshold, farmingType, mre, out aggressor);
                     if (outcome == "dead")
                     {
                         StopApp();
@@ -224,13 +237,13 @@ namespace MagBot_FFXIV_v02
                     }
                     if (outcome == "aggro" && aggressor != null) //It won't check for aggro if we are running to an aggressor, and outcome can never be "aggro"
                     {
-                        if (farmingType == FarmingType.Field)
+                        if (fieldFarming)
                         {
                             InitiateEscape(escapeRoute, true, mre);
                             break; //Start running again
                         }
 
-                        if (farmingType == FarmingType.Battle)
+                        if (farmingType == FarmingType.Battle) //If aggro: Change target
                         {
                             Globals.Instance.GameLogger.Log("Aggressive enemy found. Pursuing it...");
                             target = aggressor;
@@ -248,7 +261,7 @@ namespace MagBot_FFXIV_v02
                 }
 
                 mre.WaitOne(300); //Pause before engaging target
-                var engageOutcome = farmingType == FarmingType.Field ? _player.Gather(mre) : _player.AttackTarget(target, mre); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next target. 
+                var engageOutcome = fieldFarming ? _player.Gather(mre, farmingType) : _player.AttackTarget(target, mre); //If canceled: break. If escape: Initiate escape (run escape route, then continue running). Else (successful): search for next target. 
                 if (engageOutcome == "dead")
                 {
                     StopApp();
@@ -277,7 +290,7 @@ namespace MagBot_FFXIV_v02
                 aggressor = _player.AggroCheck(mre);
                 if (aggressor != null)
                 {
-                    if (farmingType == FarmingType.Field)
+                    if (fieldFarming)
                     {
                         InitiateEscape(escapeRoute, true, mre);
                         break; //Start running again
@@ -303,7 +316,7 @@ namespace MagBot_FFXIV_v02
 
                     //Search for target
                     FarmingMre.WaitOne(Utils.getRandom(300, 500)); //Pause between AggroCheck and TargetCheck
-                    target = farmingType == FarmingType.Field ? _player.NpcCheck(mre) : _player.EnemyCheck(mre);
+                    target = fieldFarming ? _player.NpcCheck(mre) : _player.EnemyCheck(mre);
                     if (target != null)
                     {
                         Globals.Instance.GameLogger.Log("Non-aggressive target found. Pursuing it...");

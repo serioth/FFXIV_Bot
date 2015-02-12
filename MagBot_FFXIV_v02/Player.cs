@@ -23,7 +23,7 @@ namespace MagBot_FFXIV_v02
             string outcome = null;
             target = null;
             var wp = route.ClosestWaypoint(WaypointLocation);
-            Globals.Instance.KeySenderInstance.SendDown(Keys.W);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             while (!mre.WaitOne(0))
             {
                 Globals.Instance.GameLogger.Log("RunToPoint(): " + route.Name  +". Point " + route.Points.IndexOf(wp));
@@ -39,7 +39,7 @@ namespace MagBot_FFXIV_v02
                 wp = oppositeWay ? route.PreviousWaypoint(wp) : route.NextWaypoint(wp);
             }
             if (mre.WaitOne(0)) outcome = "canceled"; //FarmingMre can happen after RunToPoint(), in which case this fixes outcome
-            Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             return outcome;
         }
 
@@ -53,12 +53,14 @@ namespace MagBot_FFXIV_v02
             //If pursuing enemy: return outcome up call tree and proceed to look for next enemy
             //If pursuing point: return outcome up one level, Turn180() and select next point
         //success: return outcome up one level and proceed as appropriate
-        private string RunToPoint(Func<Waypoint> wp, bool targetCheck, bool aggroCheck, bool stopAtEnd, bool gathering, out Character target, int distanceTreshold, ManualResetEvent mre)
+        private string RunToPoint(Func<Waypoint> wp, bool targetCheck, bool aggroCheck, bool stopAtEnd, FarmingHandler.FarmingType farmingType, out Character target, int distanceTreshold, ManualResetEvent mre)
         {
+            var fieldFarming = farmingType == FarmingHandler.FarmingType.Botany || farmingType == FarmingHandler.FarmingType.Mining; //Needed to know what type of target check we should do
+
             //Start and stop of running must be done outside of this method
             var outcome = "success";
             target = null;
-            if (stopAtEnd) Globals.Instance.KeySenderInstance.SendDown(Keys.W);
+            if (stopAtEnd) Globals.Instance.KeySenderInstance.SendKey(Keys.R);
 
             //Stopwatch is for jumping logic
             var sw = new Stopwatch();
@@ -94,7 +96,7 @@ namespace MagBot_FFXIV_v02
                 }
                 if (targetCheck)
                 {
-                    target = gathering ? NpcCheck(mre) : EnemyCheck(mre);
+                    target = fieldFarming ? NpcCheck(mre) : EnemyCheck(mre);
                     if (target != null)
                     {
                         outcome = "target";
@@ -109,16 +111,71 @@ namespace MagBot_FFXIV_v02
                 }
             }
             sw.Stop();
-            if (stopAtEnd &&  outcome != "stuck") Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            if (stopAtEnd &&  outcome != "stuck") Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             Globals.Instance.GameLogger.Log("RunToPoint() completed. Outcome: " + outcome);
             return outcome;
         }
 
-        public string RunToTarget(Character target, bool aggroCheck, int distanceTreshold, bool gathering, ManualResetEvent mre, out Character aggressor)
+        public string RunToLockedTarget(Character target, bool aggroCheck, out Character aggressor, int distanceTreshold, ManualResetEvent mre)
+        {
+            //Start and stop of running must be done outside of this method
+            var outcome = "success";
+            aggressor = null;
+
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
+            mre.WaitOne(Utils.getRandom(200, 400));
+            Globals.Instance.KeySenderInstance.SendKey(Keys.R);
+
+            //Stopwatch is for jumping logic
+            var sw = new Stopwatch();
+            sw.Start();
+            var previousDistance = WaypointLocation.Distance(target.WaypointLocation);
+            var previousTime = new TimeSpan(0, 0, 0); //hr, min, sec
+
+            while ((WaypointLocation.Distance(target.WaypointLocation) > distanceTreshold))
+            {
+                if (!aggroCheck) mre.WaitOne(200); // Just to slow it down (aggroCheck and targetCheck normally slows it down)
+
+                if (mre.WaitOne(0))
+                {
+                    outcome = "canceled";
+                    break;
+                }
+                if (HP == 0)
+                {
+                    outcome = "dead";
+                    break;
+                }
+                if (aggroCheck)
+                {
+                    aggressor = AggroCheck(mre);
+                    if (aggressor != null)
+                    {
+                        outcome = "aggro";
+                        break;
+                    }
+                }
+
+                if (sw.Elapsed >= previousTime.Add(new TimeSpan(0, 0, 1)))
+                {
+                    if (JumpIfStuck(ref previousTime, ref previousDistance, target.WaypointLocation, mre) != "stuck") continue;
+                    outcome = "stuck";
+                    break;
+                }
+            }
+            sw.Stop();
+            if (outcome != "stuck") Globals.Instance.KeySenderInstance.SendKey(Keys.R);
+            mre.WaitOne(Utils.getRandom(200, 400));
+            Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5); //So we can treat it as a normal run
+            Globals.Instance.GameLogger.Log("RunToPoint() completed. Outcome: " + outcome);
+            return outcome;
+        }
+
+        public string RunToTarget(Character target, bool aggroCheck, int distanceTreshold, FarmingHandler.FarmingType farmingType , ManualResetEvent mre, out Character aggressor)
         {
             //The lambda represents a method that runs and returns target.WaypointLocation
             Globals.Instance.GameLogger.Log("RunToTarget(): " + target.Name);
-            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, gathering, out aggressor, distanceTreshold, mre);
+            return RunToPoint(() => target.WaypointLocation, false, aggroCheck, true, farmingType, out aggressor, distanceTreshold, mre);
         }
 
         private void Face(Waypoint pt, double distanceTreshold, ManualResetEvent mre)
@@ -228,10 +285,10 @@ namespace MagBot_FFXIV_v02
             return "success";
         }
 
-        public string Gather(ManualResetEvent mre)
+        public string Gather(ManualResetEvent mre, FarmingHandler.FarmingType farmingType)
         {
             Globals.Instance.GameLogger.Log("Gather() initiated...");
-            PreGather(mre);
+            PreGather(mre, farmingType);
 
             var count = 0;
             while (HasTarget(Globals.Instance.MemoryBaseOffsetDictionary["Target1"]))
@@ -260,6 +317,7 @@ namespace MagBot_FFXIV_v02
                 }
 
                 //Engage
+                Globals.Instance.GameLogger.Log("Gathering, count: " + (count+1));
                 Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0); //If we do not have a npc selected, this selects closest enemy or npc
                 mre.WaitOne(Utils.getRandom(2600, 3000));
                 count++;
@@ -269,10 +327,11 @@ namespace MagBot_FFXIV_v02
                     //For some reason we have not been able to reach target, so lock, move forward and circle around target and try again
                     Globals.Instance.GameLogger.Log("Could not reach target, attempting to reposition.");
                     Reposition(mre);
-                    PreGather(mre);
+                    PreGather(mre, farmingType);
                     count = 0;
                 }
             }
+            Globals.Instance.GameLogger.Log("Gather() complete.");
 
             //Todo: This should check for stealth status and only take it off if we have it on. Until then, don't use it
             Task.Run(async () =>
@@ -296,8 +355,9 @@ namespace MagBot_FFXIV_v02
             return MP < MaxMP * tresholdPercent;
         }
 
-        private void PreGather(ManualResetEvent mre)
+        private void PreGather(ManualResetEvent mre, FarmingHandler.FarmingType farmingType)
         {
+            //Globals.Instance.KeySenderInstance.SendKey(Keys.End);
             UseSkill(Globals.Instance.SkillDictionary["XpFood"], mre, true); //TODO: Instead check if it is on, and cast if not
             //UseSkill(Globals.Instance.SkillDictionary["Stealth"], mre, false, true);
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
@@ -308,7 +368,15 @@ namespace MagBot_FFXIV_v02
             //So if we are leveling, choose FieldMaster. If we are farming for items, choose other ones (maybe randomize)
             //LeafTurn increases HQ, which increases XP earned though. So keep that in mind when leveling
             //UseSkill(Globals.Instance.SkillDictionary["FieldMastery"], mre, false, true);
-            UseSkill(Globals.Instance.SkillDictionary["LeafTurn"], mre, false, true);
+            switch (farmingType)
+            {
+                case(FarmingHandler.FarmingType.Botany):
+                    UseSkill(Globals.Instance.SkillDictionary["LeafTurn"], mre, false, true);
+                    break;
+                case(FarmingHandler.FarmingType.Mining):
+                    UseSkill(Globals.Instance.SkillDictionary["SharpVision"], mre, false, true);
+                    break;
+            }
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad0);
             mre.WaitOne(Utils.getRandom(2600, 3000));
         }
@@ -435,7 +503,7 @@ namespace MagBot_FFXIV_v02
             if (skill.Ready != true) return;
             if (mre.WaitOne(0)) return;
 
-            Globals.Instance.GameLogger.Log("Using skill: " + skill.Name + ". Button: " + skill.Button);
+            Globals.Instance.GameLogger.Log("Using skill: " + skill.Name);
 
             if (ctrl)
             {
@@ -536,9 +604,9 @@ namespace MagBot_FFXIV_v02
             if (mre.WaitOne(0)) return;
             Globals.Instance.KeySenderInstance.SendKey(Keys.NumPad5);
             mre.WaitOne(300);
-            Globals.Instance.KeySenderInstance.SendDown(Keys.W);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             mre.WaitOne(5000);
-            Globals.Instance.KeySenderInstance.SendUp(Keys.W);
+            Globals.Instance.KeySenderInstance.SendKey(Keys.R);
             mre.WaitOne(300);
             Globals.Instance.KeySenderInstance.SendDown(Keys.A);
             mre.WaitOne(800); //Turn 90 degrees

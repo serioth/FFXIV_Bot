@@ -63,7 +63,8 @@ namespace MagBot_FFXIV_v02
             this.toolStripSeparator5 = new System.Windows.Forms.ToolStripSeparator();
             this.aboutToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.FarmingTab = new System.Windows.Forms.TabPage();
-            this.rbDoL = new System.Windows.Forms.RadioButton();
+            this.rbMining = new System.Windows.Forms.RadioButton();
+            this.rbBotany = new System.Windows.Forms.RadioButton();
             this.rbBattle = new System.Windows.Forms.RadioButton();
             this.label8 = new System.Windows.Forms.Label();
             this.label7 = new System.Windows.Forms.Label();
@@ -109,10 +110,10 @@ namespace MagBot_FFXIV_v02
             this.pictureBox1 = new System.Windows.Forms.PictureBox();
             this.tab = new System.Windows.Forms.TabControl();
             this.tweaksTab = new System.Windows.Forms.TabPage();
-            this.cbAlwaysRun = new System.Windows.Forms.CheckBox();
-            this.label10 = new System.Windows.Forms.Label();
             this.label18 = new System.Windows.Forms.Label();
             this.label19 = new System.Windows.Forms.Label();
+            this.cbAlwaysRun = new System.Windows.Forms.CheckBox();
+            this.label10 = new System.Windows.Forms.Label();
             this.menuStrip1.SuspendLayout();
             this.FarmingTab.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.nudMinutes)).BeginInit();
@@ -311,20 +312,20 @@ namespace MagBot_FFXIV_v02
             // checkValuesToolStripMenuItem
             // 
             this.checkValuesToolStripMenuItem.Name = "checkValuesToolStripMenuItem";
-            this.checkValuesToolStripMenuItem.Size = new System.Drawing.Size(152, 22);
+            this.checkValuesToolStripMenuItem.Size = new System.Drawing.Size(144, 22);
             this.checkValuesToolStripMenuItem.Text = "Chec&k Values";
             this.checkValuesToolStripMenuItem.Click += new System.EventHandler(this.checkValuesToolStripMenuItem_Click);
             // 
             // customizeToolStripMenuItem
             // 
             this.customizeToolStripMenuItem.Name = "customizeToolStripMenuItem";
-            this.customizeToolStripMenuItem.Size = new System.Drawing.Size(152, 22);
+            this.customizeToolStripMenuItem.Size = new System.Drawing.Size(144, 22);
             this.customizeToolStripMenuItem.Text = "&Customize";
             // 
             // optionsToolStripMenuItem
             // 
             this.optionsToolStripMenuItem.Name = "optionsToolStripMenuItem";
-            this.optionsToolStripMenuItem.Size = new System.Drawing.Size(152, 22);
+            this.optionsToolStripMenuItem.Size = new System.Drawing.Size(144, 22);
             this.optionsToolStripMenuItem.Text = "&Options";
             // 
             // helpToolStripMenuItem
@@ -370,7 +371,8 @@ namespace MagBot_FFXIV_v02
             // 
             // FarmingTab
             // 
-            this.FarmingTab.Controls.Add(this.rbDoL);
+            this.FarmingTab.Controls.Add(this.rbMining);
+            this.FarmingTab.Controls.Add(this.rbBotany);
             this.FarmingTab.Controls.Add(this.rbBattle);
             this.FarmingTab.Controls.Add(this.label8);
             this.FarmingTab.Controls.Add(this.label7);
@@ -411,16 +413,27 @@ namespace MagBot_FFXIV_v02
             this.FarmingTab.Text = "Farming";
             this.FarmingTab.UseVisualStyleBackColor = true;
             // 
-            // rbDoL
+            // rbMining
             // 
-            this.rbDoL.AutoSize = true;
-            this.rbDoL.Location = new System.Drawing.Point(154, 7);
-            this.rbDoL.Name = "rbDoL";
-            this.rbDoL.Size = new System.Drawing.Size(45, 17);
-            this.rbDoL.TabIndex = 61;
-            this.rbDoL.Text = "DoL";
-            this.rbDoL.UseVisualStyleBackColor = true;
-            this.rbDoL.CheckedChanged += new System.EventHandler(this.rbDoL_CheckedChanged);
+            this.rbMining.AutoSize = true;
+            this.rbMining.Location = new System.Drawing.Point(216, 7);
+            this.rbMining.Name = "rbMining";
+            this.rbMining.Size = new System.Drawing.Size(56, 17);
+            this.rbMining.TabIndex = 62;
+            this.rbMining.Text = "Mining";
+            this.rbMining.UseVisualStyleBackColor = true;
+            this.rbMining.CheckedChanged += new System.EventHandler(this.rbMining_CheckedChanged);
+            // 
+            // rbBotany
+            // 
+            this.rbBotany.AutoSize = true;
+            this.rbBotany.Location = new System.Drawing.Point(154, 7);
+            this.rbBotany.Name = "rbBotany";
+            this.rbBotany.Size = new System.Drawing.Size(58, 17);
+            this.rbBotany.TabIndex = 61;
+            this.rbBotany.Text = "Botany";
+            this.rbBotany.UseVisualStyleBackColor = true;
+            this.rbBotany.CheckedChanged += new System.EventHandler(this.rbBotany_CheckedChanged);
             // 
             // rbBattle
             // 
@@ -875,6 +888,25 @@ namespace MagBot_FFXIV_v02
             this.tweaksTab.Text = "Tweaks";
             this.tweaksTab.UseVisualStyleBackColor = true;
             // 
+            // label18
+            // 
+            this.label18.AutoSize = true;
+            this.label18.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label18.Location = new System.Drawing.Point(3, 17);
+            this.label18.Name = "label18";
+            this.label18.Size = new System.Drawing.Size(59, 13);
+            this.label18.TabIndex = 52;
+            this.label18.Text = "TWEAKS";
+            // 
+            // label19
+            // 
+            this.label19.BackColor = System.Drawing.Color.Black;
+            this.label19.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.label19.Location = new System.Drawing.Point(6, 33);
+            this.label19.Name = "label19";
+            this.label19.Size = new System.Drawing.Size(310, 1);
+            this.label19.TabIndex = 51;
+            // 
             // cbAlwaysRun
             // 
             this.cbAlwaysRun.AutoSize = true;
@@ -894,25 +926,6 @@ namespace MagBot_FFXIV_v02
             this.label10.Size = new System.Drawing.Size(77, 13);
             this.label10.TabIndex = 46;
             this.label10.Text = "Always Run:";
-            // 
-            // label18
-            // 
-            this.label18.AutoSize = true;
-            this.label18.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label18.Location = new System.Drawing.Point(3, 17);
-            this.label18.Name = "label18";
-            this.label18.Size = new System.Drawing.Size(59, 13);
-            this.label18.TabIndex = 52;
-            this.label18.Text = "TWEAKS";
-            // 
-            // label19
-            // 
-            this.label19.BackColor = System.Drawing.Color.Black;
-            this.label19.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.label19.Location = new System.Drawing.Point(6, 33);
-            this.label19.Name = "label19";
-            this.label19.Size = new System.Drawing.Size(310, 1);
-            this.label19.TabIndex = 51;
             // 
             // MainForm
             // 
@@ -980,7 +993,7 @@ namespace MagBot_FFXIV_v02
         private System.Windows.Forms.ToolStripMenuItem aboutToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem checkValuesToolStripMenuItem;
         private System.Windows.Forms.TabPage FarmingTab;
-        private System.Windows.Forms.RadioButton rbDoL;
+        private System.Windows.Forms.RadioButton rbBotany;
         private System.Windows.Forms.RadioButton rbBattle;
         private System.Windows.Forms.Label label8;
         private System.Windows.Forms.Label label7;
@@ -1030,6 +1043,7 @@ namespace MagBot_FFXIV_v02
         private System.Windows.Forms.Label label10;
         private System.Windows.Forms.Label label18;
         private System.Windows.Forms.Label label19;
+        private System.Windows.Forms.RadioButton rbMining;
     }
 }
 

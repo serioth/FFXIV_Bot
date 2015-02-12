@@ -175,10 +175,16 @@ namespace MagBot_FFXIV_v02
                     _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun, selectedEscapeRoute);
                 }
             }
-            else if (rbDoL.Checked)
+            else if (rbBotany.Checked)
             {
                 var selectedRoute = _farmingRouteManager.Routes[Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1];
-                _farmingThread = new Thread(() => _farmingHandler.StartGathering(selectedRoute, selectedEscapeRoute));
+                _farmingThread = new Thread(() => _farmingHandler.StartGathering(selectedRoute, selectedEscapeRoute, FarmingHandler.FarmingType.Botany));
+                _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun, selectedEscapeRoute);
+            }
+            else if (rbMining.Checked)
+            {
+                var selectedRoute = _farmingRouteManager.Routes[Convert.ToInt32(lvWaypoints.SelectedItems[0].Text) - 1];
+                _farmingThread = new Thread(() => _farmingHandler.StartGathering(selectedRoute, selectedEscapeRoute, FarmingHandler.FarmingType.Mining));
                 _farmingTimer.Elapsed += (s, a) => OnTimedEvent_FarmingTimer(secondsToRun, selectedEscapeRoute);
             }
             _farmingThread.IsBackground = true;
@@ -240,9 +246,14 @@ namespace MagBot_FFXIV_v02
             SaveRoutes(_farmingRouteManager);
         }
 
-        private void rbDoL_CheckedChanged(object sender, EventArgs e)
+        private void rbBotany_CheckedChanged(object sender, EventArgs e)
         {
-            cbStandStill.Enabled = !rbDoL.Checked;
+            cbStandStill.Enabled = !(rbBotany.Checked || rbMining.Checked);
+        }
+
+        private void rbMining_CheckedChanged(object sender, EventArgs e)
+        {
+            cbStandStill.Enabled = !(rbBotany.Checked || rbMining.Checked);
         }
 
         private void cbAlwaysRun_CheckedChanged(object sender, EventArgs e)
